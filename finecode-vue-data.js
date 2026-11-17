@@ -2288,22 +2288,2050 @@ NITRO_PRESET=cloudflare-pages npx nuxi build
         },
       ],
     },
+    {
+      id: 'vue-11', no: 11, name: `TypeScript 깊이`,
+      lead: `Vue 와 Nuxt 에서 타입을 제대로 받아 쓰는 습관입니다. any 로 넘기지 않고 추론이 흐르게 합니다.`,
+      lessons: [
+        {
+          id: 'l1', short: `any 금지`,
+          title: `모르는 값은 any 가 아니라 unknown`,
+          why: `any 는 검사를 끄는 스위치라 그 값을 지나는 모든 코드가 검사에서 빠집니다. unknown 은 좁히기 전에는 아무것도 못 하게 막아 실수를 컴파일 단계에서 잡습니다.`,
+          bad: String.raw`
+async function load(): Promise<any> {
+  return await $fetch('/api/user')
+}
+const u = await load()
+u.profile.nmae            // 오타인데 통과, 실행 중에 터진다
+`,
+          good: String.raw`
+interface User { id: number; name: string; profile?: { bio: string } }
+
+async function load(): Promise<User> {
+  return await $fetch<User>('/api/user')
+}
+const u = await load()
+u.profile?.bio            // 오타는 컴파일 오류, optional 은 ?. 로
+
+function parse(raw: unknown): User {
+  if (typeof raw === 'object' && raw && 'id' in raw) return raw as User
+  throw new Error('bad user')
+}
+`,
+        },
+        {
+          id: 'l2', short: `템플릿 ref 타입`,
+          title: `컴포넌트 ref 는 InstanceType, 요소 ref 는 HTML 요소 타입`,
+          why: `ref() 에 타입을 주지 않으면 any 가 됩니다. 자식 컴포넌트는 InstanceType&lt;typeof Comp&gt;, DOM 은 HTMLInputElement 처럼 적어야 메서드 자동 완성이 됩니다.`,
+          bad: String.raw`
+const input = ref()            // any
+const modal = ref()            // any
+input.value.focuss()           // 오타가 통과한다
+`,
+          good: String.raw`
+import Modal from '~/components/AppModal.vue'
+
+const input = ref<HTMLInputElement | null>(null)
+const modal = ref<InstanceType<typeof Modal> | null>(null)
+input.value?.focus()
+modal.value?.open()            // defineExpose 한 것만 보인다
+
+// Vue 3.5
+const input2 = useTemplateRef<HTMLInputElement>('input')
+`,
+        },
+        {
+          id: 'l3', short: `리터럴 유니온`,
+          title: `문자열 상태는 string 이 아니라 리터럴 유니온`,
+          why: `string 으로 두면 'loding' 같은 오타가 통과하고 switch 에서 빠뜨린 경우도 못 잡습니다. 유니온으로 좁히면 자동 완성과 빠짐 검사가 따라옵니다.`,
+          bad: String.raw`
+const status = ref('idle')              // string
+function go(s: string) { status.value = s }
+go('loding')                             // 통과
+`,
+          good: String.raw`
+type Status = 'idle' | 'loading' | 'success' | 'error'
+const status = ref<Status>('idle')
+status.value = 'loding'                  // 오류
+
+// 목록을 한 곳에만 두고 타입을 뽑는다
+export const SIZES = ['sm', 'md', 'lg'] as const
+export type Size = (typeof SIZES)[number]   // 'sm' | 'md' | 'lg'
+`,
+        },
+        {
+          id: 'l4', short: `Props 타입 재사용`,
+          title: `props 타입은 외부 interface 로 꺼내 재사용한다`, ver: `Vue 3.3+`,
+          why: `같은 props 모양을 여러 컴포넌트가 쓰거나 테스트에서 참조하려면 타입이 파일 밖에 있어야 합니다. 3.3 부터 import 한 타입도 defineProps 에 바로 씁니다.`,
+          bad: String.raw`
+// 컴포넌트마다 같은 모양을 다시 적는다
+defineProps<{ id: number; name: string; email: string; role: 'admin' | 'user' }>()
+`,
+          good: String.raw`
+// types/user.ts
+export interface User { id: number; name: string; email: string; role: 'admin' | 'user' }
+
+// UserCard.vue
+import type { User } from '~/types/user'
+defineProps<{ user: User; compact?: boolean }>()
+
+// 다른 컴포넌트의 props 타입이 필요할 때
+type CardProps = InstanceType<typeof UserCard>['$props']
+`,
+        },
+        {
+          id: 'l5', short: `API 응답 타입`,
+          title: `API 응답 타입은 한 곳에서 정의하고 서버와 공유한다`,
+          why: `클라이언트가 응답 모양을 따로 적으면 서버가 바뀔 때 어긋납니다. Nuxt 는 server/api 핸들러의 반환 타입을 useFetch 에 그대로 추론해 주고, zod 스키마가 있으면 양쪽이 같은 타입을 씁니다.`,
+          bad: String.raw`
+// 클라이언트에서 따로 적은 타입. 서버가 바뀌면 조용히 어긋난다
+interface Res { items: { id: number; title: string }[] }
+const { data } = await useFetch<Res>('/api/posts')
+`,
+          good: String.raw`
+// server/api/posts.get.ts
+export default defineEventHandler(async () => {
+  const items = await db.post.findMany()
+  return { items }                        // 반환 타입이 곧 응답 타입
+})
+
+// 페이지: 타입 인자 없이도 { items: Post[] } 로 추론된다
+const { data } = await useFetch('/api/posts')
+
+// 입력도 스키마에서 뽑는다 (shared/ 나 server/utils 에 두고 양쪽이 import)
+export const PostInput = z.object({ title: z.string(), body: z.string() })
+export type PostInput = z.infer<typeof PostInput>
+`,
+        },
+        {
+          id: 'l6', short: `satisfies`,
+          title: `설정 객체는 as 가 아니라 satisfies`,
+          why: `as 는 틀린 모양도 강제로 통과시키고 리터럴 정보를 잃게 합니다. satisfies 는 모양을 검사하면서 추론된 좁은 타입을 그대로 남깁니다.`,
+          bad: String.raw`
+const routes = {
+  home: '/', about: '/abuot'
+} as Record<string, string>
+routes.hmoe                 // string 으로 통과, 오타를 못 잡는다
+`,
+          good: String.raw`
+const routes = {
+  home: '/', about: '/about'
+} satisfies Record<string, string>
+routes.hmoe                 // 오류: 키가 home | about 으로 남아 있다
+
+const theme = { primary: '#1f5fbf', radius: 8 } satisfies ThemeConfig
+`,
+        },
+        {
+          id: 'l7', short: `제네릭 컴포저블`,
+          title: `컴포저블은 제네릭으로 호출 쪽 타입을 받는다`,
+          why: `useList 가 any[] 를 돌려주면 항목을 쓰는 곳마다 타입이 사라집니다. 타입 매개변수를 두면 호출 인자에서 추론되어 반환까지 흐릅니다.`,
+          bad: String.raw`
+export function usePaged(url: string) {
+  const items = ref<any[]>([])
+  ...
+  return { items }
+}
+const { items } = usePaged('/api/users')   // any[]
+`,
+          good: String.raw`
+export function usePaged<T>(url: MaybeRefOrGetter<string>) {
+  const items = ref<T[]>([]) as Ref<T[]>     // Ref<UnwrapRef<T>[]> 가 되는 것을 막는다
+  const page = ref(1)
+  async function load() {
+    items.value = await $fetch<T[]>(toValue(url), { query: { page: page.value } })
+  }
+  return { items, page, load }
+}
+const { items } = usePaged<User>('/api/users')   // Ref<User[]>
+`,
+          note: `ref 에 제네릭 T 를 넣으면 Vue 가 UnwrapRef 를 적용해 타입이 꼬일 때가 있습니다. 그럴 때 <code>as Ref&lt;T[]&gt;</code> 로 고정하는 것이 관용구입니다.`,
+        },
+        {
+          id: 'l8', short: `판별 유니온`,
+          title: `비동기 상태는 판별 유니온으로 한 번에`,
+          why: `data, error, loading 을 따로 두면 "로딩 중인데 error 도 있는" 모순 상태가 가능합니다. status 로 판별하는 유니온은 한 상태에 맞는 필드만 허용합니다.`,
+          bad: String.raw`
+const data = ref<User | null>(null)
+const error = ref<Error | null>(null)
+const loading = ref(false)
+// 세 값의 조합 8가지 중 말이 되는 건 3가지뿐
+`,
+          good: String.raw`
+type Async<T> =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'success'; data: T }
+  | { status: 'error'; error: Error }
+
+const state = ref<Async<User>>({ status: 'idle' })
+
+// 템플릿/코드에서 status 로 좁히면 data 가 있는 경우만 접근된다
+if (state.value.status === 'success') state.value.data.name
+`,
+        },
+        {
+          id: 'l9', short: `모듈 확장`,
+          title: `전역 속성과 라우트 meta 는 declare module 로 타입을 붙인다`,
+          why: `app.config.globalProperties 나 route.meta 에 넣은 값은 기본이 unknown 입니다. 모듈 확장으로 선언하면 템플릿과 미들웨어에서 타입이 보입니다.`,
+          bad: String.raw`
+app.config.globalProperties.$fmt = formatMoney
+// 템플릿: {{ $fmt(price) }}   → 타입 오류 또는 any
+
+definePageMeta({ requiresAuth: true })
+to.meta.requiresAuth            // unknown
+`,
+          good: String.raw`
+// types/vue.d.ts
+declare module 'vue' {
+  interface ComponentCustomProperties { $fmt: (n: number) => string }
+}
+// types/router.d.ts  (Nuxt 는 '#app' 의 PageMeta 를 확장)
+declare module '#app' {
+  interface PageMeta { requiresAuth?: boolean; roles?: string[] }
+}
+export {}
+`,
+          note: `.d.ts 파일에 <code>export {}</code> 가 있어야 모듈로 취급되어 확장이 적용됩니다.`,
+        },
+        {
+          id: 'l10', short: `strict 와 vue-tsc`,
+          title: `tsconfig 는 strict, 검사는 vue-tsc 로`,
+          why: `tsc 는 .vue 템플릿을 보지 못합니다. vue-tsc 가 템플릿 안의 props, 이벤트, 슬롯까지 검사합니다. strict 가 꺼져 있으면 null 검사가 빠져 절반만 잡습니다.`,
+          bad: String.raw`
+// tsconfig.json
+{ "compilerOptions": { "strict": false, "noImplicitAny": false } }
+// package.json: "typecheck": "tsc --noEmit"      ← 템플릿은 검사되지 않는다
+`,
+          good: String.raw`
+// tsconfig.json  (Nuxt 는 .nuxt/tsconfig.json 을 extends)
+{ "extends": "./.nuxt/tsconfig.json", "compilerOptions": { "strict": true } }
+
+// package.json
+"typecheck": "vue-tsc --noEmit"            // Vue 프로젝트
+"typecheck": "nuxi typecheck"              // Nuxt 프로젝트
+
+// CI 에서 lint 와 함께 돌린다
+`,
+        },
+      ],
+    },
+    {
+      id: 'vue-12', no: 12, name: `폼과 검증`,
+      lead: `입력, 검증, 제출, 오류 표시를 일관되게 처리하는 습관입니다. VeeValidate 와 zod 조합을 기준으로 합니다.`,
+      lessons: [
+        {
+          id: 'l1', short: `스키마 검증`,
+          title: `검증 규칙은 if 문이 아니라 스키마에`,
+          why: `필드마다 if 로 검사하면 규칙이 흩어지고 서버와 어긋납니다. zod 스키마 하나를 클라이언트 폼과 서버 API 가 같이 쓰면 규칙이 한 곳에 모입니다.`,
+          bad: String.raw`
+function submit() {
+  if (!email.value) { errors.email = '필수'; return }
+  if (!email.value.includes('@')) { errors.email = '형식'; return }
+  if (password.value.length < 8) { errors.password = '8자 이상'; return }
+  ...
+}
+`,
+          good: String.raw`
+// shared/schemas/signup.ts  (서버 server/api 도 같은 파일을 import)
+import { z } from 'zod'
+export const SignupSchema = z.object({
+  email: z.string().email('이메일 형식이 아닙니다'),
+  password: z.string().min(8, '8자 이상'),
+  agree: z.literal(true, { errorMap: () => ({ message: '동의가 필요합니다' }) })
+})
+export type Signup = z.infer<typeof SignupSchema>
+`,
+        },
+        {
+          id: 'l2', short: `useForm`,
+          title: `VeeValidate 의 useForm + toTypedSchema`, ver: `VeeValidate 4`,
+          why: `폼 상태(값, 오류, touched, 제출 중)를 손으로 관리하면 컴포넌트가 상태 기계가 됩니다. useForm 이 그 상태를 들고, toTypedSchema 로 zod 타입이 values 에 흐릅니다.`,
+          bad: String.raw`
+const email = ref(''); const password = ref('')
+const errors = reactive({ email: '', password: '' })
+const touched = reactive({ email: false, password: false })
+const submitting = ref(false)
+// blur, input, submit 마다 위 상태를 손으로 갱신...
+`,
+          good: String.raw`
+import { useForm } from 'vee-validate'
+import { toTypedSchema } from '@vee-validate/zod'
+
+const { defineField, handleSubmit, errors, isSubmitting } = useForm({
+  validationSchema: toTypedSchema(SignupSchema)
+})
+const [email, emailAttrs] = defineField('email')
+const [password, passwordAttrs] = defineField('password')
+
+const onSubmit = handleSubmit(async (values) => {   // values: Signup, 검증 통과 시에만
+  await $fetch('/api/signup', { method: 'POST', body: values })
+})
+`,
+        },
+        {
+          id: 'l3', short: `오류 표시 시점`,
+          title: `오류는 입력 중이 아니라 blur 나 제출 뒤에 보여 준다`,
+          why: `첫 글자를 치자마자 "형식이 아닙니다" 가 뜨면 사용자가 혼납니다. 필드를 떠났을 때 검증하고, 한 번 오류가 난 뒤에는 입력할 때마다 다시 검사해 고쳐지는 것을 바로 보여 줍니다.`,
+          bad: String.raw`
+<input v-model="email" @input="validate">
+<p v-if="errors.email">{{ errors.email }}</p>   <!-- 'a' 만 쳐도 빨갛다 -->
+`,
+          good: String.raw`
+<!-- defineField 의 attrs 가 blur / input 검증 시점을 처리한다 -->
+<input v-model="email" v-bind="emailAttrs" :aria-invalid="!!errors.email" aria-describedby="email-err">
+<p id="email-err" v-if="errors.email">{{ errors.email }}</p>
+
+<script setup>
+const [email, emailAttrs] = defineField('email', {
+  validateOnBlur: true, validateOnModelUpdate: false   // 떠날 때 검사, 오류 뒤에는 자동으로 재검사
+})
+</script>
+`,
+        },
+        {
+          id: 'l4', short: `필드 컴포넌트`,
+          title: `레이블, 입력, 오류를 묶은 필드 컴포넌트 하나`,
+          why: `폼마다 label + input + 오류 문구 + aria 속성을 반복하면 하나만 빠져도 접근성이 깨집니다. FormField 컴포넌트가 그 묶음을 책임집니다.`,
+          bad: String.raw`
+<label>이메일</label>
+<input v-model="email" v-bind="emailAttrs">
+<span class="err">{{ errors.email }}</span>
+<label>비밀번호</label>
+<input v-model="password" v-bind="passwordAttrs" type="password">
+<span class="err">{{ errors.password }}</span>
+`,
+          good: String.raw`
+<!-- components/FormField.vue -->
+<script setup lang="ts">
+import { useField } from 'vee-validate'
+const props = defineProps<{ name: string; label: string; type?: string }>()
+const { value, errorMessage, handleBlur } = useField<string>(() => props.name)
+const id = useId()
+</script>
+<template>
+  <div class="field">
+    <label :for="id">{{ label }}</label>
+    <input :id="id" v-model="value" :type="type ?? 'text'" @blur="handleBlur"
+           :aria-invalid="!!errorMessage" :aria-describedby="errorMessage ? id + '-err' : undefined">
+    <p v-if="errorMessage" :id="id + '-err'" class="err">{{ errorMessage }}</p>
+  </div>
+</template>
+
+<!-- 폼: useForm 아래에서 이름만 맞추면 연결된다 -->
+<FormField name="email" label="이메일" />
+<FormField name="password" label="비밀번호" type="password" />
+`,
+          note: `<code>useId()</code> 는 Vue 3.5 부터 SSR 에서도 안전한 id 를 만듭니다.`,
+        },
+        {
+          id: 'l5', short: `서버 오류 매핑`,
+          title: `서버가 돌려준 필드 오류를 폼에 다시 꽂는다`,
+          why: `"이미 쓰는 이메일" 같은 오류는 서버만 압니다. 상태 코드만 보고 alert 를 띄우면 사용자가 어느 칸을 고쳐야 할지 모릅니다. setErrors 로 해당 필드에 보여 줍니다.`,
+          bad: String.raw`
+try { await $fetch('/api/signup', { method: 'POST', body: values }) }
+catch (e) { alert('실패했습니다') }
+`,
+          good: String.raw`
+// server: 422 와 함께 필드별 메시지
+throw createError({ statusCode: 422, data: { errors: { email: '이미 가입된 이메일입니다' } } })
+
+// client
+const { setErrors } = useForm(...)
+const onSubmit = handleSubmit(async (values) => {
+  try { await $fetch('/api/signup', { method: 'POST', body: values }) }
+  catch (e) {
+    const err = e as FetchError
+    if (err.statusCode === 422) setErrors(err.data.errors)
+    else throw e
+  }
+})
+`,
+        },
+        {
+          id: 'l6', short: `이중 제출`,
+          title: `제출 중에는 버튼을 잠그고 결과로 상태를 바꾼다`,
+          why: `느린 네트워크에서 버튼을 두 번 누르면 주문이 두 개 생깁니다. isSubmitting 으로 잠그고, 성공 뒤에는 폼을 초기화하거나 이동합니다.`,
+          bad: String.raw`
+<button @click="submit">가입</button>     <!-- 두 번 누르면 두 번 간다 -->
+`,
+          good: String.raw`
+<form @submit="onSubmit">
+  <button type="submit" :disabled="isSubmitting">
+    {{ isSubmitting ? '처리 중…' : '가입' }}
+  </button>
+</form>
+
+// 성공 뒤
+const onSubmit = handleSubmit(async (values) => {
+  await $fetch(...)
+  resetForm()                      // 또는 navigateTo('/welcome')
+})
+`,
+          note: `서버 쪽에도 멱등 키(Idempotency-Key 헤더)를 두면 네트워크 재시도까지 안전합니다.`,
+        },
+        {
+          id: 'l7', short: `동적 필드`,
+          title: `배열 필드는 useFieldArray`,
+          why: `주소 여러 개, 담당자 여러 명처럼 늘었다 줄어드는 입력을 index 로 직접 관리하면 삭제할 때 검증 오류가 한 칸씩 밀립니다. useFieldArray 가 키와 오류를 함께 옮깁니다.`,
+          bad: String.raw`
+const phones = ref([''])
+<div v-for="(p, i) in phones" :key="i">
+  <input v-model="phones[i]">
+  <button @click="phones.splice(i, 1)">삭제</button>   <!-- 오류 문구가 밀린다 -->
+</div>
+`,
+          good: String.raw`
+const { fields, push, remove } = useFieldArray<string>('phones')
+
+<div v-for="(f, i) in fields" :key="f.key">          <!-- 안정적인 key -->
+  <FormField :name="'phones[' + i + ']'" label="전화" />
+  <button type="button" @click="remove(i)">삭제</button>
+</div>
+<button type="button" @click="push('')">추가</button>
+`,
+        },
+        {
+          id: 'l8', short: `초기값과 dirty`,
+          title: `수정 폼은 initialValues 를 주고 바뀐 것만 보낸다`,
+          why: `수정 화면에서 전체 객체를 PUT 하면 동시에 고친 다른 사람의 값을 덮어씁니다. 초기값을 알면 바뀐 필드만 PATCH 할 수 있고, 떠날 때 "저장 안 한 변경" 도 물을 수 있습니다.`,
+          bad: String.raw`
+const form = reactive({ ...props.user })
+async function save() { await $fetch('/api/users/' + id, { method: 'PUT', body: form }) }
+`,
+          good: String.raw`
+const { handleSubmit, meta, values, resetForm } = useForm({
+  validationSchema: toTypedSchema(UserSchema),
+  initialValues: props.user
+})
+const save = handleSubmit(async (v) => {
+  const changed = Object.fromEntries(Object.entries(v).filter(([k, val]) => val !== props.user[k]))
+  await $fetch('/api/users/' + id, { method: 'PATCH', body: changed })
+  resetForm({ values: v })          // 저장한 값이 새 기준
+})
+
+onBeforeRouteLeave(() => meta.value.dirty ? confirm('저장하지 않은 변경이 있습니다. 나갈까요?') : true)
+`,
+        },
+        {
+          id: 'l9', short: `서버 재검증`,
+          title: `클라이언트 검증은 편의, 서버 검증이 진짜`,
+          why: `브라우저 검증은 개발자 도구로 우회됩니다. 같은 스키마로 서버에서 다시 검사하지 않으면 아무 값이나 저장됩니다.`,
+          bad: String.raw`
+// server/api/signup.post.ts
+export default defineEventHandler(async (event) => {
+  const body = await readBody(event)      // 프론트가 검사했으니 믿는다?
+  await createUser(body)
+})
+`,
+          good: String.raw`
+import { SignupSchema } from '~~/shared/schemas/signup'
+
+export default defineEventHandler(async (event) => {
+  const body = await readValidatedBody(event, (b) => SignupSchema.safeParse(b))
+  if (!body.success) {
+    throw createError({ statusCode: 422, data: { errors: body.error.flatten().fieldErrors } })
+  }
+  await createUser(body.data)
+})
+`,
+        },
+        {
+          id: 'l10', short: `파일 입력`,
+          title: `파일 입력은 v-model 이 안 되니 change 이벤트로`,
+          why: `input type=file 은 값을 프로그램으로 설정할 수 없어 v-model 이 동작하지 않습니다. change 에서 files 를 꺼내 상태에 넣고, 크기와 종류는 보내기 전에 검사합니다.`,
+          bad: String.raw`
+<input type="file" v-model="file">      <!-- 동작하지 않는다 -->
+`,
+          good: String.raw`
+<input type="file" accept="image/*" @change="onPick">
+
+<script setup lang="ts">
+const file = ref<File | null>(null)
+function onPick(e: Event) {
+  const f = (e.target as HTMLInputElement).files?.[0] ?? null
+  if (f && f.size > 5 * 1024 * 1024) { error.value = '5MB 이하만'; return }
+  file.value = f
+}
+async function upload() {
+  const fd = new FormData()
+  fd.append('file', file.value!)
+  await $fetch('/api/upload', { method: 'POST', body: fd })   // Content-Type 은 자동
+}
+</script>
+`,
+        },
+      ],
+    },
+    {
+      id: 'vue-13', no: 13, name: `인증과 세션`,
+      lead: `로그인 상태를 안전하게 들고 다니는 습관입니다. Nuxt 의 nuxt-auth-utils 를 기준으로 하되, 원리는 어디서나 같습니다.`,
+      lessons: [
+        {
+          id: 'l1', short: `토큰 저장 위치`,
+          title: `토큰은 localStorage 가 아니라 httpOnly 쿠키`,
+          why: `localStorage 의 토큰은 XSS 한 번이면 그대로 새어 나갑니다. httpOnly 쿠키는 스크립트가 읽을 수 없고, SSR 요청에도 자동으로 실려 서버 렌더링 때 로그인 상태를 압니다.`,
+          bad: String.raw`
+const { token } = await $fetch('/api/login', { method: 'POST', body })
+localStorage.setItem('token', token)                 // XSS 에 노출
+$fetch('/api/me', { headers: { Authorization: 'Bearer ' + localStorage.getItem('token') } })
+`,
+          good: String.raw`
+// server/api/login.post.ts
+export default defineEventHandler(async (event) => {
+  const user = await verifyCredentials(await readBody(event))
+  setCookie(event, 'session', await seal(user), {
+    httpOnly: true, secure: true, sameSite: 'lax', path: '/', maxAge: 60 * 60 * 24 * 7
+  })
+  return { ok: true }
+})
+// 이후 요청은 쿠키가 자동으로 붙는다. 클라이언트 코드에 토큰이 없다
+`,
+        },
+        {
+          id: 'l2', short: `nuxt-auth-utils`,
+          title: `세션은 직접 짜지 말고 nuxt-auth-utils`, ver: `nuxt-auth-utils`,
+          why: `쿠키 봉인, 만료, OAuth 콜백을 직접 짜면 빠뜨리는 것이 생깁니다. nuxt-auth-utils 는 암호화된 세션 쿠키와 useUserSession, requireUserSession, OAuth 핸들러를 제공합니다.`,
+          bad: String.raw`
+// 직접 JWT 만들고, 쿠키 쓰고, 검증하고, OAuth 콜백 파싱하고...
+const token = jwt.sign({ id }, SECRET)
+`,
+          good: String.raw`
+// nuxt.config.ts: modules: ['nuxt-auth-utils'], .env: NUXT_SESSION_PASSWORD (32자 이상)
+
+// server/api/login.post.ts
+export default defineEventHandler(async (event) => {
+  const user = await verifyCredentials(await readBody(event))
+  await setUserSession(event, { user: { id: user.id, name: user.name, role: user.role } })
+  return { ok: true }
+})
+
+// 컴포넌트
+const { loggedIn, user, clear, fetch: refresh } = useUserSession()
+`,
+        },
+        {
+          id: 'l3', short: `서버 보호`,
+          title: `API 보호는 requireUserSession 한 줄`,
+          why: `세션 검사를 핸들러마다 다르게 쓰면 하나는 빠집니다. 보호가 필요한 핸들러 맨 위에 같은 호출을 두면 없을 때 401 로 끝납니다.`,
+          bad: String.raw`
+export default defineEventHandler(async (event) => {
+  const cookie = getCookie(event, 'session')
+  if (!cookie) return { error: 'login' }          // 200 에 오류, 핸들러마다 제각각
+  ...
+})
+`,
+          good: String.raw`
+export default defineEventHandler(async (event) => {
+  const { user } = await requireUserSession(event)   // 없으면 401
+  return db.orders.byUser(user.id)
+})
+
+// 역할까지
+const { user } = await requireUserSession(event)
+if (user.role !== 'admin') throw createError({ statusCode: 403 })
+`,
+        },
+        {
+          id: 'l4', short: `페이지 보호`,
+          title: `페이지 보호는 라우트 미들웨어, 원래 가려던 곳을 기억한다`,
+          why: `로그인 뒤 홈으로 보내면 사용자가 다시 찾아가야 합니다. 미들웨어에서 redirect 쿼리로 원래 주소를 넘기고, 로그인 성공 시 거기로 돌려보냅니다.`,
+          bad: String.raw`
+// 페이지마다
+if (!loggedIn.value) navigateTo('/login')
+// 로그인 뒤 항상 /
+`,
+          good: String.raw`
+// middleware/auth.ts
+export default defineNuxtRouteMiddleware((to) => {
+  const { loggedIn } = useUserSession()
+  if (!loggedIn.value) return navigateTo({ path: '/login', query: { redirect: to.fullPath } })
+})
+
+// pages/login.vue
+const route = useRoute()
+async function login() {
+  await $fetch('/api/login', { method: 'POST', body: form })
+  await refresh()                                     // useUserSession().fetch
+  const back = String(route.query.redirect || '/')
+  await navigateTo(back.startsWith('/') ? back : '/')  // 외부 주소로 보내는 오픈 리다이렉트 방지
+}
+`,
+        },
+        {
+          id: 'l5', short: `로그아웃`,
+          title: `로그아웃은 서버 세션 삭제 + 클라이언트 캐시 비우기`,
+          why: `클라이언트 상태만 지우면 쿠키가 살아 있어 새로고침하면 다시 로그인됩니다. 서버에서 세션을 지우고, useFetch 캐시와 스토어도 비운 뒤 이동합니다.`,
+          bad: String.raw`
+function logout() {
+  user.value = null
+  navigateTo('/')          // 쿠키는 그대로, 캐시된 /api/me 도 그대로
+}
+`,
+          good: String.raw`
+async function logout() {
+  await $fetch('/api/logout', { method: 'POST' })   // 서버: clearUserSession(event)
+  await clear()                                     // useUserSession().clear
+  clearNuxtData()                                   // 사용자 데이터 캐시 비우기
+  useCartStore().$reset?.()
+  await navigateTo('/login')
+}
+`,
+        },
+        {
+          id: 'l6', short: `OAuth`,
+          title: `소셜 로그인은 서버 라우트에서 콜백을 받는다`,
+          why: `클라이언트에서 OAuth 토큰 교환을 하면 client secret 이 노출됩니다. 서버 라우트가 콜백을 받아 세션을 만들고 리다이렉트합니다.`,
+          bad: String.raw`
+// 브라우저에서 토큰 교환: secret 이 번들에 들어간다
+const res = await fetch('https://github.com/login/oauth/access_token', {
+  body: JSON.stringify({ client_id, client_secret, code })
+})
+`,
+          good: String.raw`
+// server/routes/auth/github.get.ts
+export default defineOAuthGitHubEventHandler({
+  config: { emailRequired: true },
+  async onSuccess(event, { user }) {
+    const local = await upsertUserByEmail(user.email, { name: user.name, avatar: user.avatar_url })
+    await setUserSession(event, { user: { id: local.id, name: local.name, role: local.role } })
+    return sendRedirect(event, '/')
+  },
+  onError(event) { return sendRedirect(event, '/login?error=oauth') }
+})
+// .env: NUXT_OAUTH_GITHUB_CLIENT_ID, NUXT_OAUTH_GITHUB_CLIENT_SECRET
+// <a href="/auth/github">GitHub 로 로그인</a>
+`,
+        },
+        {
+          id: 'l7', short: `세션에 넣을 것`,
+          title: `세션에는 식별자와 역할만, 비밀은 서버 전용 칸에`,
+          why: `세션 쿠키는 4KB 제한이 있고 user 부분은 클라이언트에 보입니다. 프로필 전체나 액세스 토큰을 넣지 말고, 외부 API 토큰은 secure 칸에 둡니다.`,
+          bad: String.raw`
+await setUserSession(event, { user: fullUserRow, githubToken: token })   // 전부 클라이언트에 노출
+`,
+          good: String.raw`
+await setUserSession(event, {
+  user: { id: user.id, name: user.name, role: user.role },   // 클라이언트에 보여도 되는 것
+  secure: { githubToken: token },                              // 서버에서만 읽힌다
+  loggedInAt: Date.now()
+})
+
+// 서버에서
+const session = await getUserSession(event)
+session.secure?.githubToken
+`,
+        },
+        {
+          id: 'l8', short: `만료와 갱신`,
+          title: `세션 만료는 서버가 정하고, 만료 응답은 한 곳에서 처리한다`,
+          why: `401 을 받는 곳마다 로그인 페이지로 보내는 코드를 쓰면 빠지는 곳이 생깁니다. $fetch 인스턴스의 onResponseError 한 곳에서 처리합니다.`,
+          bad: String.raw`
+try { await $fetch('/api/orders') } catch (e) { if (e.statusCode === 401) navigateTo('/login') }
+try { await $fetch('/api/me') }     catch (e) { if (e.statusCode === 401) navigateTo('/login') }
+`,
+          good: String.raw`
+// plugins/api.ts
+export default defineNuxtPlugin((nuxtApp) => {
+  const api = $fetch.create({
+    async onResponseError({ response }) {
+      if (response.status === 401) {
+        await nuxtApp.runWithContext(() => navigateTo('/login'))
+      }
+    }
+  })
+  return { provide: { api } }
+})
+// 사용: const { $api } = useNuxtApp(); await $api('/api/orders')
+`,
+          note: `액세스 토큰 + 리프레시 토큰 방식의 자동 재발급은 "실무 코드" 세트 1회차에서 전체 코드로 다룹니다.`,
+        },
+        {
+          id: 'l9', short: `CSRF`,
+          title: `쿠키 인증에는 SameSite 와 CSRF 보호`,
+          why: `쿠키는 다른 사이트에서 보낸 요청에도 자동으로 붙습니다. SameSite=lax 가 기본 방어이고, 상태를 바꾸는 요청에는 Origin 검사나 CSRF 토큰을 더합니다.`,
+          bad: String.raw`
+setCookie(event, 'session', value)       // SameSite 없음, secure 없음
+// 다른 사이트의 <form action="https://내사이트/api/transfer"> 가 쿠키를 달고 들어온다
+`,
+          good: String.raw`
+setCookie(event, 'session', value, { httpOnly: true, secure: true, sameSite: 'lax' })
+
+// server/middleware/csrf.ts: 상태 변경 요청은 Origin 이 우리 사이트인지 본다
+export default defineEventHandler((event) => {
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(event.method)) {
+    const origin = getHeader(event, 'origin')
+    if (origin && new URL(origin).host !== getRequestHost(event)) {
+      throw createError({ statusCode: 403, statusMessage: 'Bad origin' })
+    }
+  }
+})
+`,
+          note: `nuxt-csurf 모듈이 토큰 방식을 대신해 줍니다. API 를 다른 도메인에서 쓰려면 CORS 와 함께 설계합니다.`,
+        },
+        {
+          id: 'l10', short: `로그인 UI 상태`,
+          title: `로그인 여부에 따른 UI 는 서버 렌더링 결과와 같아야 한다`,
+          why: `서버는 로그아웃 화면을, 클라이언트는 로그인 화면을 그리면 하이드레이션이 깨지고 헤더가 깜빡입니다. 세션을 서버에서 읽어 양쪽이 같은 값으로 시작하게 합니다.`,
+          bad: String.raw`
+const loggedIn = ref(false)
+onMounted(() => { loggedIn.value = !!localStorage.getItem('token') })   // 마운트 뒤 깜빡
+<NavUser v-if="loggedIn" />
+`,
+          good: String.raw`
+// useUserSession 은 서버에서 쿠키를 읽어 페이로드로 넘기므로 양쪽이 같다
+const { loggedIn, user } = useUserSession()
+<NavUser v-if="loggedIn" :user="user" />
+<NuxtLink v-else to="/login">로그인</NuxtLink>
+
+// 직접 만들 때는 useState + 서버 플러그인으로 초기값을 채운다
+`,
+        },
+      ],
+    },
+    {
+      id: 'vue-14', no: 14, name: `다국어 i18n`,
+      lead: `@nuxtjs/i18n 으로 다국어를 붙일 때의 습관입니다. 문구, 날짜, 숫자, URL 까지 한 번에 다룹니다.`,
+      lessons: [
+        {
+          id: 'l1', short: `하드코딩 금지`,
+          title: `문구는 템플릿에 박지 말고 메시지 키로`,
+          why: `문구가 템플릿에 박혀 있으면 번역할 때 모든 파일을 뒤져야 하고 같은 문구가 조금씩 달라집니다. 키로 쓰면 한 파일에서 관리합니다.`,
+          bad: String.raw`
+<button>저장</button>
+<p>{{ count }}개의 항목</p>
+`,
+          good: String.raw`
+<button>{{ $t('common.save') }}</button>
+<p>{{ $t('items.count', { n: count }) }}</p>
+
+// i18n/locales/ko.json
+{ "common": { "save": "저장" }, "items": { "count": "{n}개의 항목" } }
+`,
+        },
+        {
+          id: 'l2', short: `설정`,
+          title: `로케일 파일은 lazy 로, 기본 언어는 접두사 없이`, ver: `@nuxtjs/i18n 9+`,
+          why: `모든 언어 메시지를 한 번에 번들에 넣으면 쓰지도 않는 언어까지 받습니다. lazy 로 현재 언어만 받고, URL 전략은 기본 언어는 /, 나머지는 /en/ 처럼 둡니다.`,
+          bad: String.raw`
+// nuxt.config.ts
+i18n: { vueI18n: { messages: { ko: {...}, en: {...}, ja: {...} } } }   // 전부 번들에
+`,
+          good: String.raw`
+// nuxt.config.ts
+modules: ['@nuxtjs/i18n'],
+i18n: {
+  locales: [
+    { code: 'ko', language: 'ko-KR', file: 'ko.json', name: '한국어' },
+    { code: 'en', language: 'en-US', file: 'en.json', name: 'English' }
+  ],
+  defaultLocale: 'ko',
+  strategy: 'prefix_except_default',   // /about, /en/about
+  lazy: true,
+  langDir: 'locales'                   // i18n/locales/
+}
+`,
+        },
+        {
+          id: 'l3', short: `링크`,
+          title: `링크는 localePath, 언어 전환은 switchLocalePath`,
+          why: `/about 으로 하드코딩하면 영어 사용자가 한국어 페이지로 갑니다. localePath 가 현재 언어의 접두사를 붙이고, switchLocalePath 는 같은 페이지의 다른 언어 주소를 만듭니다.`,
+          bad: String.raw`
+<NuxtLink to="/about">소개</NuxtLink>          <!-- /en 에서 눌러도 /about -->
+<a href="/en">English</a>                       <!-- 항상 홈으로 -->
+`,
+          good: String.raw`
+const localePath = useLocalePath()
+const switchLocalePath = useSwitchLocalePath()
+
+<NuxtLink :to="localePath('/about')">{{ $t('nav.about') }}</NuxtLink>
+<NuxtLink :to="localePath({ name: 'users-id', params: { id: 3 } })">...</NuxtLink>
+<NuxtLink v-for="l in locales" :key="l.code" :to="switchLocalePath(l.code)">{{ l.name }}</NuxtLink>
+`,
+        },
+        {
+          id: 'l4', short: `복수형`,
+          title: `개수에 따른 문구는 문자열 조립이 아니라 복수형 규칙`,
+          why: `"1 items" 를 피하려고 if 로 조립하면 언어마다 규칙이 달라 무너집니다. 메시지에 복수형을 두고 $t 에 개수를 넘깁니다.`,
+          bad: String.raw`
+{{ count }} {{ count === 1 ? 'item' : 'items' }}     <!-- 영어만 생각한 코드 -->
+`,
+          good: String.raw`
+// en.json
+{ "cart": { "items": "no items | one item | {count} items" } }
+// ko.json
+{ "cart": { "items": "{count}개" } }
+
+{{ $t('cart.items', count) }}
+`,
+        },
+        {
+          id: 'l5', short: `날짜, 숫자`,
+          title: `날짜와 금액은 $d, $n 으로 로케일에 맞게`,
+          why: `toLocaleString 을 여기저기 다른 옵션으로 부르면 화면마다 형식이 다릅니다. 형식 이름을 정해 두고 로케일만 바뀌게 합니다.`,
+          bad: String.raw`
+{{ new Date(order.at).toLocaleDateString('ko-KR') }}
+{{ order.total.toLocaleString() }}원
+`,
+          good: String.raw`
+// i18n.config.ts
+export default defineI18nConfig(() => ({
+  datetimeFormats: { ko: { short: { year: 'numeric', month: 'short', day: 'numeric' } }, en: { ... } },
+  numberFormats:   { ko: { currency: { style: 'currency', currency: 'KRW' } }, en: { currency: { style: 'currency', currency: 'USD' } } }
+}))
+
+{{ $d(new Date(order.at), 'short') }}
+{{ $n(order.total, 'currency') }}
+`,
+        },
+        {
+          id: 'l6', short: `스크립트에서`,
+          title: `스크립트와 서버에서는 useI18n / 서버 번역 함수`,
+          why: `$t 는 템플릿용 전역입니다. 컴포저블이나 API 응답 메시지에서는 useI18n 의 t 를 쓰고, 서버 라우트에서는 요청의 Accept-Language 로 번역합니다.`,
+          bad: String.raw`
+const msg = this.$t('error.network')      // Composition API 에 this 없음
+throw createError({ statusMessage: '권한이 없습니다' })   // 서버: 항상 한국어
+`,
+          good: String.raw`
+// 컴포넌트/컴포저블
+const { t, locale } = useI18n()
+toast(t('error.network'))
+
+// 서버 라우트 (experimental.localeDetector 설정 뒤)
+export default defineEventHandler(async (event) => {
+  const t = await useTranslation(event)
+  throw createError({ statusCode: 403, statusMessage: t('error.forbidden') })
+})
+`,
+        },
+        {
+          id: 'l7', short: `SEO`,
+          title: `언어별 head 는 useLocaleHead`,
+          why: `hreflang, lang 속성, 대체 URL 이 없으면 검색 엔진이 언어 페이지를 중복으로 봅니다. useLocaleHead 가 그 메타를 만들어 줍니다.`,
+          bad: String.raw`
+useHead({ htmlAttrs: { lang: 'ko' } })      // 영어 페이지에도 ko
+`,
+          good: String.raw`
+// app.vue 또는 layouts/default.vue
+const head = useLocaleHead({ seo: true })
+useHead(() => ({
+  htmlAttrs: { lang: head.value.htmlAttrs!.lang },
+  link: head.value.link,     // alternate hreflang, canonical
+  meta: head.value.meta      // og:locale
+}))
+`,
+        },
+        {
+          id: 'l8', short: `키 설계`,
+          title: `키는 화면이 아니라 의미로, 중첩은 두세 단계까지`,
+          why: `page1.button3 같은 키는 재사용이 안 되고, 한 단어 키는 문맥이 사라집니다. 영역.의미 두세 단계가 찾기도 재사용도 쉽습니다.`,
+          bad: String.raw`
+{ "home": { "section2": { "btn1": "자세히" } }, "ok": "확인", "ok2": "확인하기" }
+`,
+          good: String.raw`
+{
+  "common": { "confirm": "확인", "cancel": "취소", "more": "자세히" },
+  "auth":   { "login": "로그인", "logout": "로그아웃", "error": { "invalid": "아이디 또는 비밀번호가 틀립니다" } },
+  "order":  { "status": { "paid": "결제 완료", "shipped": "배송 중" } }
+}
+
+// 동적 키는 템플릿 리터럴로
+$t(\`order.status.\${order.status}\`)
+`,
+        },
+        {
+          id: 'l9', short: `빠진 번역`,
+          title: `빠진 키는 조용히 넘기지 말고 개발 중에 드러낸다`,
+          why: `번역이 빠지면 키 이름이 그대로 화면에 나옵니다. 개발에서는 경고를 켜 바로 잡고, 빌드에서는 fallback 언어로 채웁니다.`,
+          bad: String.raw`
+i18n: { vueI18n: { missingWarn: false, fallbackWarn: false } }   // 전부 끄고 모른 체
+`,
+          good: String.raw`
+// i18n.config.ts
+export default defineI18nConfig(() => ({
+  fallbackLocale: 'ko',
+  missingWarn: import.meta.dev,          // 개발에서만 경고
+  fallbackWarn: false
+}))
+
+// CI: 키 목록 비교 스크립트로 ko.json 과 en.json 의 키가 같은지 검사한다
+`,
+        },
+        {
+          id: 'l10', short: `언어 감지`,
+          title: `첫 방문은 브라우저 언어로, 선택은 쿠키로 기억`,
+          why: `매번 기본 언어로 보내면 사용자가 매번 바꿉니다. 처음에만 브라우저 언어로 보내고 선택을 쿠키에 저장하면 다음 방문부터 그대로입니다.`,
+          bad: String.raw`
+i18n: { detectBrowserLanguage: false }   // 항상 ko
+`,
+          good: String.raw`
+i18n: {
+  detectBrowserLanguage: {
+    useCookie: true,
+    cookieKey: 'i18n_redirected',
+    redirectOn: 'root',        // 루트 접속 때만 감지, 공유된 /en/... 링크는 그대로
+    fallbackLocale: 'ko'
+  }
+}
+`,
+        },
+      ],
+    },
+    {
+      id: 'vue-15', no: 15, name: `렌더링 모드`,
+      lead: `SSR, SSG, ISR/SWR, SPA 를 언제 쓰고 어떻게 섞는지에 대한 습관입니다. Nuxt 는 경로별로 다르게 둘 수 있습니다.`,
+      lessons: [
+        {
+          id: 'l1', short: `기본은 SSR`,
+          title: `이유 없이 ssr: false 로 끄지 않는다`,
+          why: `SSR 을 끄면 첫 화면이 빈 HTML 이라 검색 노출과 첫 표시가 느려집니다. 하이드레이션 오류를 피하려고 끄는 것은 원인을 덮는 것입니다. 관리자 화면처럼 꼭 필요한 경로만 끕니다.`,
+          bad: String.raw`
+// nuxt.config.ts
+export default defineNuxtConfig({ ssr: false })   // 하이드레이션 경고 몇 개 때문에 전체를 SPA 로
+`,
+          good: String.raw`
+export default defineNuxtConfig({
+  routeRules: {
+    '/admin/**': { ssr: false }      // 로그인 뒤에만 쓰는 관리자 화면만 SPA
+  }
+})
+// 하이드레이션 경고는 <ClientOnly> 나 onMounted 로 원인을 고친다 (10회차 08번)
+`,
+        },
+        {
+          id: 'l2', short: `prerender`,
+          title: `바뀌지 않는 페이지는 빌드 때 미리 만든다`,
+          why: `소개, 약관, 블로그 글처럼 요청마다 같은 페이지를 매번 서버 렌더링할 이유가 없습니다. prerender 하면 CDN 에서 바로 나갑니다.`,
+          bad: String.raw`
+// 약관 페이지도 요청마다 SSR
+`,
+          good: String.raw`
+routeRules: {
+  '/': { prerender: true },
+  '/about': { prerender: true },
+  '/terms': { prerender: true },
+  '/blog/**': { prerender: true }        // 빌드 때 링크를 따라가며 생성
+}
+// 또는 nitro: { prerender: { routes: ['/sitemap.xml'], crawlLinks: true } }
+`,
+        },
+        {
+          id: 'l3', short: `swr / isr`,
+          title: `자주 안 바뀌지만 가끔 바뀌는 페이지는 swr`,
+          why: `상품 목록은 몇 분 전 것을 보여 줘도 되지만 빌드마다 다시 만들 수는 없습니다. swr 은 캐시된 HTML 을 주고 만료 뒤 백그라운드에서 새로 만듭니다.`,
+          bad: String.raw`
+// 상품 목록을 매 요청 SSR: DB 를 매번 친다
+// 또는 prerender: 상품이 바뀌면 재배포
+`,
+          good: String.raw`
+routeRules: {
+  '/products': { swr: 600 },             // 10분. 만료 뒤 첫 요청은 옛 HTML, 뒤에서 갱신
+  '/products/**': { swr: 3600 },
+  '/news': { isr: 60 }                   // 플랫폼(Vercel, Netlify 등) 의 ISR 캐시 사용
+}
+`,
+          note: `swr 은 Nitro 서버 캐시, isr 은 호스팅 플랫폼의 CDN 캐시입니다. 자체 Node 서버면 swr 을 씁니다.`,
+        },
+        {
+          id: 'l4', short: `generate`,
+          title: `완전 정적 사이트는 nuxi generate, 동적 경로는 목록을 준다`,
+          why: `generate 는 링크를 따라가며 페이지를 만듭니다. 링크로 닿지 않는 동적 경로(/posts/123)는 목록을 알려 줘야 빠지지 않습니다.`,
+          bad: String.raw`
+npx nuxi generate
+# /posts/123 이 어디서도 링크되지 않아 404
+`,
+          good: String.raw`
+// nuxt.config.ts
+nitro: {
+  prerender: {
+    crawlLinks: true,
+    routes: ['/sitemap.xml']
+  }
+},
+hooks: {
+  async 'prerender:routes'(ctx) {
+    const posts = await fetch('https://cms/posts').then(r => r.json())
+    for (const p of posts) ctx.routes.add('/posts/' + p.slug)
+  }
+}
+`,
+        },
+        {
+          id: 'l5', short: `클라이언트 전용`,
+          title: `브라우저 API 가 필요한 컴포넌트는 .client.vue 또는 ClientOnly`,
+          why: `차트, 지도, 에디터는 window 를 바로 씁니다. 서버에서 import 되는 순간 터집니다. 파일 이름에 .client 를 붙이면 서버 번들에서 빠집니다.`,
+          bad: String.raw`
+// components/MapView.vue
+import maplibregl from 'maplibre-gl'      // 서버에서 window is not defined
+`,
+          good: String.raw`
+// components/MapView.client.vue   → 서버에서는 렌더링되지 않는다
+import maplibregl from 'maplibre-gl'
+
+<!-- 또는 쓰는 쪽에서 -->
+<ClientOnly>
+  <MapView />
+  <template #fallback><div class="map-skeleton" /></template>
+</ClientOnly>
+`,
+        },
+        {
+          id: 'l6', short: `서버 전용 컴포넌트`,
+          title: `정적 HTML 만 내는 무거운 컴포넌트는 .server.vue`,
+          why: `마크다운 렌더링, 구문 강조처럼 서버에서 한 번 만들면 되는 HTML 을 클라이언트에 라이브러리째 보낼 이유가 없습니다. 서버 컴포넌트는 결과 HTML 만 내려갑니다.`,
+          bad: String.raw`
+// components/Markdown.vue: 300KB 마크다운 파서가 클라이언트 번들에
+`,
+          good: String.raw`
+// components/Markdown.server.vue
+<script setup lang="ts">
+import { marked } from 'marked'
+const props = defineProps<{ source: string }>()
+const html = marked(props.source)
+</script>
+<template><div v-html="html" /></template>
+// 클라이언트에는 결과 HTML 만 간다. 상호작용이 필요한 부분은 자식에 .client 컴포넌트를 둔다
+`,
+          note: `서버 컴포넌트는 <code>experimental.componentIslands</code> 설정이 필요할 수 있습니다. 버전에 따라 기본 활성 여부가 다릅니다.`,
+        },
+        {
+          id: 'l7', short: `요청 정보`,
+          title: `서버 렌더링 중 요청 정보는 useRequestHeaders, useRequestEvent`,
+          why: `SSR 중 $fetch 는 브라우저 쿠키를 자동으로 넘기지 않습니다. 사용자별 API 를 서버에서 부를 때는 요청의 쿠키를 직접 넘겨야 합니다.`,
+          bad: String.raw`
+const { data } = await useFetch('https://api.example.com/me')   // 외부 API: SSR 에서 쿠키 없이 간다
+`,
+          good: String.raw`
+const headers = useRequestHeaders(['cookie'])
+const { data } = await useFetch('https://api.example.com/me', { headers })
+
+// 내부 /api/** 는 useFetch 가 SSR 중 직접 호출(네트워크 없이)하며 쿠키가 전달된다
+// 서버에서만 되는 것: const event = useRequestEvent()   (클라이언트에서는 undefined)
+`,
+        },
+        {
+          id: 'l8', short: `페이로드`,
+          title: `페이로드에 못 담는 값은 넣지 않는다`,
+          why: `useState 와 useFetch 결과는 JSON 비슷한 형식으로 HTML 에 실립니다. Date, Map, 클래스 인스턴스, 함수는 깨지거나 경고가 납니다.`,
+          bad: String.raw`
+const state = useState('cfg', () => ({ at: new Date(), fmt: (n) => n + '원', map: new Map() }))
+`,
+          good: String.raw`
+const state = useState('cfg', () => ({ at: new Date().toISOString() }))
+// Date 는 문자열로 두고 쓰는 곳에서 new Date(state.value.at)
+// 함수는 상태가 아니라 utils/ 에
+
+// 꼭 필요하면 payload 플러그인으로 직렬화를 정의한다 (definePayloadPlugin, definePayloadReducer)
+`,
+        },
+        {
+          id: 'l9', short: `하이브리드 점검`,
+          title: `경로별 렌더링 모드는 표로 정리해 두고 nuxi analyze 로 확인`,
+          why: `routeRules 가 늘어나면 어느 페이지가 어떤 방식인지 아무도 모르게 됩니다. 표 하나로 정리하고, 빌드 결과의 prerender 목록을 확인합니다.`,
+          bad: String.raw`
+// routeRules 가 30줄, 겹치는 패턴 ('/blog/**' 와 '/blog/draft/**') 이 어느 쪽이 이기는지 아무도 모른다
+`,
+          good: String.raw`
+// docs/rendering.md 로 관리하고 routeRules 는 그 표를 옮긴 것
+// | 경로            | 방식       | 이유                      |
+// | /               | prerender  | 랜딩, 배포 때 갱신        |
+// | /products/**    | swr 1h     | 수시로 바뀜, 검색 노출     |
+// | /me/**          | ssr        | 사용자별                   |
+// | /admin/**       | spa        | 로그인 뒤 전용             |
+
+// 구체적 패턴을 아래에: Nitro 는 더 구체적인 규칙이 우선
+routeRules: { '/blog/**': { swr: 3600 }, '/blog/draft/**': { ssr: true, swr: false } }
+`,
+        },
+        {
+          id: 'l10', short: `SPA 로딩`,
+          title: `SPA 경로의 첫 화면은 spaLoadingTemplate 로`,
+          why: `ssr: false 경로는 JS 가 받아지기 전까지 하얀 화면입니다. 로딩 템플릿을 두면 레이아웃 골격이라도 먼저 보입니다.`,
+          bad: String.raw`
+'/admin/**': { ssr: false }      // 2초간 빈 화면
+`,
+          good: String.raw`
+// app/spa-loading-template.html (Nuxt 3: 프로젝트 루트의 spa-loading-template.html)
+<div class="app-skeleton">
+  <div class="skeleton-nav"></div>
+  <div class="skeleton-body"></div>
+</div>
+
+// nuxt.config.ts
+spaLoadingTemplate: true
+`,
+        },
+      ],
+    },
+    {
+      id: 'vue-16', no: 16, name: `Nuxt 모듈과 레이어`,
+      lead: `여러 프로젝트가 공유할 설정, 컴포넌트, 서버 로직을 모듈과 레이어로 묶는 습관입니다.`,
+      lessons: [
+        {
+          id: 'l1', short: `모듈 vs 레이어`,
+          title: `기능 추가는 모듈, 프로젝트 골격 공유는 레이어`,
+          why: `모듈은 빌드 시점에 훅으로 기능을 끼우는 코드이고, 레이어는 Nuxt 프로젝트 전체(pages, components, config)를 상속하는 것입니다. 용도가 다릅니다.`,
+          bad: String.raw`
+// 회사 공통 헤더, 테마, 인증 미들웨어를 npm 패키지로 묶어 플러그인 한 개에 전부 넣는다
+// → 페이지와 레이아웃은 못 넣고, 설정 병합도 안 된다
+`,
+          good: String.raw`
+// 레이어: 공통 레이아웃, 페이지, 설정, 컴포넌트를 통째로 상속
+// nuxt.config.ts
+export default defineNuxtConfig({
+  extends: ['@company/nuxt-base', './layers/admin']
+})
+
+// 모듈: 빌드 훅으로 기능을 추가 (플러그인 주입, 컴포넌트 등록, 서버 라우트 추가)
+modules: ['@company/nuxt-analytics']
+`,
+        },
+        {
+          id: 'l2', short: `모듈 뼈대`,
+          title: `모듈은 defineNuxtModule + createResolver`, ver: `@nuxt/kit`,
+          why: `모듈 안에서 상대 경로를 그대로 쓰면 설치 위치에 따라 깨집니다. createResolver 로 모듈 파일 기준 경로를 만들고, addPlugin 같은 kit 함수로 등록합니다.`,
+          bad: String.raw`
+export default function (options, nuxt) {
+  nuxt.options.plugins.push('./runtime/plugin')    // 상대 경로: 사용 프로젝트에서 못 찾는다
+}
+`,
+          good: String.raw`
+// src/module.ts
+import { defineNuxtModule, addPlugin, addComponentsDir, createResolver } from '@nuxt/kit'
+
+export default defineNuxtModule<{ siteId: string }>({
+  meta: { name: 'my-analytics', configKey: 'analytics' },
+  defaults: { siteId: '' },
+  setup(options, nuxt) {
+    const { resolve } = createResolver(import.meta.url)
+    nuxt.options.runtimeConfig.public.analytics = { siteId: options.siteId }
+    addPlugin(resolve('./runtime/plugin.client'))
+    addComponentsDir({ path: resolve('./runtime/components') })
+  }
+})
+`,
+        },
+        {
+          id: 'l3', short: `런타임 분리`,
+          title: `모듈 코드와 런타임 코드를 나눈다`,
+          why: `module.ts 는 빌드 때 Node 에서 돌고, runtime/ 은 앱 번들에 들어가 브라우저와 서버에서 돕니다. 섞으면 Node 전용 API 가 브라우저 번들에 들어갑니다.`,
+          bad: String.raw`
+// module.ts 안에 플러그인 로직까지
+setup() {
+  nuxt.hook('app:mounted', () => window.gtag(...))   // 빌드 시점엔 window 가 없다
+}
+`,
+          good: String.raw`
+src/
+  module.ts               # 빌드 시점: 등록만 한다
+  runtime/
+    plugin.client.ts      # 앱 시점: 실제 동작
+    components/
+    server/api/track.post.ts
+
+// runtime/plugin.client.ts
+export default defineNuxtPlugin(() => {
+  const { siteId } = useRuntimeConfig().public.analytics
+  ...
+})
+`,
+        },
+        {
+          id: 'l4', short: `서버 핸들러 추가`,
+          title: `모듈이 API 를 제공하려면 addServerHandler`,
+          why: `모듈 사용자에게 "server/api 에 이 파일을 복사하세요" 라고 하면 버전이 어긋납니다. 모듈이 직접 서버 라우트를 등록합니다.`,
+          bad: String.raw`
+// README: "server/api/track.post.ts 를 복사해서 넣으세요"
+`,
+          good: String.raw`
+import { addServerHandler } from '@nuxt/kit'
+
+setup(options, nuxt) {
+  const { resolve } = createResolver(import.meta.url)
+  addServerHandler({ route: '/api/_analytics/track', method: 'post', handler: resolve('./runtime/server/track') })
+  addImports({ name: 'useTrack', from: resolve('./runtime/composables/useTrack') })   // 자동 import 등록
+}
+`,
+        },
+        {
+          id: 'l5', short: `레이어 구조`,
+          title: `레이어는 그냥 Nuxt 앱 폴더, 가까운 쪽이 이긴다`,
+          why: `레이어도 nuxt.config 와 pages, components 를 가진 Nuxt 프로젝트입니다. extends 순서에서 뒤에 적은 것과 현재 프로젝트가 같은 파일을 덮어씁니다.`,
+          bad: String.raw`
+// 베이스 레이어의 components/AppHeader.vue 를 고치려고 레이어 패키지 소스를 직접 수정
+`,
+          good: String.raw`
+// layers/base/   nuxt.config.ts, layouts/default.vue, components/AppHeader.vue, composables/useAuth.ts
+// 프로젝트/       nuxt.config.ts (extends: ['./layers/base']), components/AppHeader.vue  ← 이쪽이 쓰인다
+
+// 설정은 병합된다: 레이어의 modules 와 프로젝트의 modules 가 합쳐지고, 같은 키는 프로젝트가 이긴다
+`,
+        },
+        {
+          id: 'l6', short: `경로 별칭`,
+          title: `레이어 안에서는 ~ 대신 상대 경로나 레이어 별칭`,
+          why: `~ 와 @ 는 "현재 프로젝트" 를 가리킵니다. 레이어 코드가 ~/utils 를 import 하면 레이어가 아니라 쓰는 프로젝트의 utils 를 찾아 깨집니다.`,
+          bad: String.raw`
+// layers/base/components/Price.vue
+import { formatMoney } from '~/utils/money'     // 쓰는 프로젝트에 money.ts 가 없으면 실패
+`,
+          good: String.raw`
+// layers/base/components/Price.vue
+import { formatMoney } from '../utils/money'    // 레이어 안 상대 경로
+
+// 또는 레이어 nuxt.config 에서 별칭을 정의
+const { resolve } = createResolver(import.meta.url)
+export default defineNuxtConfig({ alias: { '#base': resolve('./') } })
+import { formatMoney } from '#base/utils/money'
+`,
+        },
+        {
+          id: 'l7', short: `설정 옵션`,
+          title: `모듈 옵션은 configKey 로 받고 runtimeConfig 로 넘긴다`,
+          why: `옵션을 코드에 문자열로 치환해 넣으면 환경마다 다시 빌드해야 합니다. runtimeConfig 로 넘기면 NUXT_ 환경 변수로 덮을 수 있습니다.`,
+          bad: String.raw`
+addTemplate({ filename: 'analytics.mjs', getContents: () => 'export const id = "' + options.siteId + '"' })
+// 환경마다 빌드
+`,
+          good: String.raw`
+// nuxt.config.ts (사용 측)
+analytics: { siteId: 'G-XXXX' }
+
+// module.ts
+setup(options, nuxt) {
+  nuxt.options.runtimeConfig.public.analytics = defu(nuxt.options.runtimeConfig.public.analytics, options)
+}
+// 배포 환경: NUXT_PUBLIC_ANALYTICS_SITE_ID=G-YYYY 로 덮는다
+`,
+        },
+        {
+          id: 'l8', short: `타입 제공`,
+          title: `모듈이 추가한 컴포저블과 설정에 타입을 붙인다`,
+          why: `addImports 로 넣은 함수는 자동 import 되지만, runtimeConfig 에 넣은 값은 타입이 없습니다. 모듈이 d.ts 를 함께 내보내야 사용자가 자동 완성을 받습니다.`,
+          bad: String.raw`
+useRuntimeConfig().public.analytics.siteId      // any
+`,
+          good: String.raw`
+// src/module.ts 안
+declare module '@nuxt/schema' {
+  interface PublicRuntimeConfig { analytics: { siteId: string } }
+}
+// 모듈 빌드(nuxt-module-build) 가 types.d.ts 로 내보낸다
+`,
+        },
+        {
+          id: 'l9', short: `플레이그라운드`,
+          title: `모듈 저장소에는 playground 와 테스트를 둔다`,
+          why: `모듈을 고칠 때마다 실제 프로젝트에 설치해 보면 느립니다. 모듈 템플릿의 playground/ 가 바로 띄우는 샘플 앱이고, @nuxt/test-utils 로 빌드까지 검증합니다.`,
+          bad: String.raw`
+npm publish 하고 회사 프로젝트에서 npm update 로 확인
+`,
+          good: String.raw`
+npx nuxi init -t module my-module      # 템플릿: src/, playground/, test/
+npm run dev                            # playground 가 모듈을 물고 뜬다
+
+// test/basic.test.ts
+import { setup, $fetch } from '@nuxt/test-utils/e2e'
+await setup({ rootDir: fileURLToPath(new URL('./fixtures/basic', import.meta.url)) })
+it('renders', async () => { expect(await $fetch('/')).toContain('<div>basic</div>') })
+`,
+          lang: { bad: 'plain' },
+        },
+        {
+          id: 'l10', short: `훅`,
+          title: `앱 동작은 nuxt 훅이 아니라 런타임 훅`,
+          why: `nuxt.hook('pages:extend') 같은 빌드 훅과 nuxtApp.hook('app:mounted') 같은 런타임 훅은 다른 세계입니다. 라우트 목록을 바꾸는 건 빌드 훅, 페이지 전환마다 하는 일은 런타임 훅입니다.`,
+          bad: String.raw`
+// plugins/foo.ts 에서 빌드 훅을 쓰려고 함
+nuxt.hook('pages:extend', ...)          // 플러그인에는 nuxt(빌더) 가 없다
+`,
+          good: String.raw`
+// 빌드 훅: nuxt.config.ts 나 모듈에서
+hooks: {
+  'pages:extend'(pages) { pages.push({ name: 'legacy', path: '/old/:id', file: '~/pages/users/[id].vue' }) }
+}
+
+// 런타임 훅: 플러그인에서
+export default defineNuxtPlugin((nuxtApp) => {
+  nuxtApp.hook('page:finish', () => { window.scrollTo(0, 0) })
+  nuxtApp.hook('vue:error', (err) => report(err))
+})
+`,
+        },
+      ],
+    },
+    {
+      id: 'vue-17', no: 17, name: `UI 라이브러리와 디자인 시스템`,
+      lead: `컴포넌트 라이브러리를 고르고, 토큰으로 스타일을 통일하고, 공통 컴포넌트를 설계하는 습관입니다.`,
+      lessons: [
+        {
+          id: 'l1', short: `라이브러리 선택`,
+          title: `라이브러리는 커스터마이징 범위로 고른다`,
+          why: `기성 디자인을 그대로 쓸 거면 완성형(Vuetify, Element Plus, PrimeVue), 디자인이 따로 있으면 헤드리스(Reka UI, Headless UI) 나 복사형(shadcn-vue) 이 맞습니다. 섞어 쓰면 두 벌의 스타일을 싸워야 합니다.`,
+          bad: String.raw`
+// 완성형 라이브러리를 깔고 모든 컴포넌트를 :deep() 으로 덮어쓴다
+.el-button { border-radius: 0 !important; background: var(--brand) !important; ... }
+`,
+          good: String.raw`
+// 디자인 시스템이 있다면: 헤드리스 + 우리 스타일
+import { DialogRoot, DialogContent } from 'reka-ui'      // 동작과 접근성만 제공
+// 또는 Nuxt UI (Tailwind 기반, app.config 로 테마)
+// 또는 shadcn-vue: 컴포넌트 소스를 프로젝트에 복사해 마음대로 고친다
+`,
+        },
+        {
+          id: 'l2', short: `토큰`,
+          title: `색, 간격, 글꼴은 CSS 변수 토큰으로`,
+          why: `#1f5fbf 가 50군데 박혀 있으면 브랜드 색을 바꿀 때 50군데를 찾아야 하고 다크 모드도 못 만듭니다. 토큰 한 벌을 두고 모든 컴포넌트가 그것만 씁니다.`,
+          bad: String.raw`
+.btn { background: #1f5fbf; padding: 8px 16px; border-radius: 6px; font-size: 14px; }
+.card { border: 1px solid #dde2ea; border-radius: 6px; }
+`,
+          good: String.raw`
+/* assets/tokens.css */
+:root {
+  --color-primary: #1f5fbf; --color-line: #dde2ea; --color-fg: #1c2230;
+  --space-2: 8px; --space-4: 16px;
+  --radius-md: 6px; --text-sm: 14px;
+}
+:root[data-theme="dark"] { --color-line: #2a3140; --color-fg: #e6e9ef; }
+
+.btn { background: var(--color-primary); padding: var(--space-2) var(--space-4); border-radius: var(--radius-md); }
+`,
+        },
+        {
+          id: 'l3', short: `Tailwind 토큰`,
+          title: `Tailwind 를 쓰면 토큰을 테마에 등록하고 임의 값은 피한다`,
+          why: `bg-[#1f5fbf] 같은 임의 값은 토큰이 아니라 하드코딩입니다. 테마에 primary 로 등록하면 bg-primary 로 쓰고 다크 모드도 한 곳에서 바뀝니다.`,
+          bad: String.raw`
+<button class="bg-[#1f5fbf] px-[16px] rounded-[6px] text-[14px]">
+`,
+          good: String.raw`
+/* Tailwind 4: CSS 로 테마 */
+@theme {
+  --color-primary: #1f5fbf;
+  --radius-md: 6px;
+}
+<button class="bg-primary px-4 rounded-md text-sm">
+`,
+        },
+        {
+          id: 'l4', short: `Base 컴포넌트`,
+          title: `원시 요소는 Base 컴포넌트로 감싸 variant 를 둔다`,
+          why: `button 에 클래스를 매번 조합하면 같은 버튼이 열 가지 모양이 됩니다. BaseButton 이 variant 와 size 를 받고 나머지 속성은 그대로 넘깁니다.`,
+          bad: String.raw`
+<button class="btn btn-primary btn-lg rounded shadow">저장</button>
+<button class="btn primary large">저장</button>        <!-- 다른 사람이 쓴 같은 버튼 -->
+`,
+          good: String.raw`
+<!-- components/BaseButton.vue -->
+<script setup lang="ts">
+const { variant = 'primary', size = 'md' } = defineProps<{
+  variant?: 'primary' | 'secondary' | 'danger'
+  size?: 'sm' | 'md' | 'lg'
+  loading?: boolean
+}>()
+</script>
+<template>
+  <button class="btn" :class="['btn-' + variant, 'btn-' + size]" :disabled="loading || $attrs.disabled">
+    <Spinner v-if="loading" /><slot />
+  </button>
+</template>
+
+<BaseButton variant="danger" size="sm" @click="remove">삭제</BaseButton>
+`,
+        },
+        {
+          id: 'l5', short: `class 병합`,
+          title: `Tailwind 클래스는 cva + tailwind-merge 로 조합한다`,
+          why: `variant 별 클래스를 문자열로 이어 붙이면 px-4 와 px-6 이 둘 다 남아 뒤에 온 것이 우연히 이깁니다. cva 가 variant 를 정리하고 tailwind-merge 가 충돌을 풉니다.`,
+          bad: String.raw`
+const cls = 'px-4 py-2 rounded ' + (size === 'lg' ? 'px-6 py-3' : '') + ' ' + attrs.class
+// 'px-4 ... px-6' 둘 다 남는다
+`,
+          good: String.raw`
+import { cva } from 'class-variance-authority'
+import { twMerge } from 'tailwind-merge'
+
+const button = cva('inline-flex items-center rounded font-medium', {
+  variants: {
+    variant: { primary: 'bg-primary text-white', secondary: 'bg-gray-100 text-gray-900' },
+    size: { sm: 'px-3 py-1 text-sm', md: 'px-4 py-2', lg: 'px-6 py-3 text-lg' }
+  },
+  defaultVariants: { variant: 'primary', size: 'md' }
+})
+const cls = computed(() => twMerge(button({ variant, size }), attrs.class as string))
+`,
+        },
+        {
+          id: 'l6', short: `접근성 내장`,
+          title: `Dialog, Menu, Tabs 는 직접 만들지 말고 헤드리스를 쓴다`,
+          why: `모달 하나에도 포커스 가두기, Esc 닫기, aria 역할, 스크롤 잠금이 필요합니다. 직접 만들면 하나는 빠집니다. 헤드리스 라이브러리는 그 동작만 제공하고 스타일은 비워 둡니다.`,
+          bad: String.raw`
+<div v-if="open" class="overlay" @click="open = false">
+  <div class="modal" @click.stop>...</div>        <!-- Esc 안 됨, 포커스 안 갇힘, 역할 없음 -->
+</div>
+`,
+          good: String.raw`
+<script setup>
+import { DialogRoot, DialogTrigger, DialogPortal, DialogOverlay, DialogContent, DialogTitle, DialogClose } from 'reka-ui'
+</script>
+<DialogRoot v-model:open="open">
+  <DialogTrigger class="btn">열기</DialogTrigger>
+  <DialogPortal>
+    <DialogOverlay class="overlay" />
+    <DialogContent class="modal">
+      <DialogTitle>제목</DialogTitle>
+      <slot />
+      <DialogClose class="btn">닫기</DialogClose>
+    </DialogContent>
+  </DialogPortal>
+</DialogRoot>
+`,
+        },
+        {
+          id: 'l7', short: `아이콘`,
+          title: `아이콘은 SVG 폰트가 아니라 컴포넌트/스프라이트`,
+          why: `아이콘 폰트는 전체를 받고, 깨지면 네모가 나오며 접근성도 나쁩니다. 쓰는 아이콘만 SVG 로 번들하거나 Nuxt Icon 으로 필요한 것만 가져옵니다.`,
+          bad: String.raw`
+<link href="font-awesome.css">      <!-- 1,500 개 아이콘 폰트 전부 -->
+<i class="fa fa-user"></i>
+`,
+          good: String.raw`
+<!-- @nuxt/icon: Iconify 컬렉션에서 쓰는 것만, 서버에서 SVG 로 -->
+<Icon name="lucide:user" size="20" />
+
+<!-- 또는 unplugin-icons 로 컴포넌트 import -->
+import IconUser from '~icons/lucide/user'
+<IconUser aria-hidden="true" /><span class="sr-only">사용자</span>
+`,
+        },
+        {
+          id: 'l8', short: `다크 모드`,
+          title: `다크 모드는 토큰 교체 + color-scheme, 깜빡임 방지`,
+          why: `컴포넌트마다 dark: 클래스를 다는 대신 토큰 값만 바꾸면 끝납니다. 선택값은 SSR 에서 읽어야 첫 화면이 깜빡이지 않습니다.`,
+          bad: String.raw`
+<div :class="dark ? 'bg-gray-900 text-white' : 'bg-white text-black'">   <!-- 모든 요소마다 -->
+onMounted(() => { dark.value = localStorage.theme === 'dark' })            <!-- 흰 화면 뒤 검게 -->
+`,
+          good: String.raw`
+// @nuxtjs/color-mode: 쿠키/스토리지에 저장하고 SSR HTML 에 class 를 미리 붙인다
+const colorMode = useColorMode()
+<button @click="colorMode.preference = colorMode.value === 'dark' ? 'light' : 'dark'">
+
+/* 토큰만 바꾼다 */
+.dark-mode { --color-bg: #12161d; --color-fg: #e6e9ef; color-scheme: dark; }
+`,
+        },
+        {
+          id: 'l9', short: `문서화`,
+          title: `공통 컴포넌트는 Storybook 이나 Histoire 로 카탈로그를 만든다`,
+          why: `어떤 variant 가 있고 어떻게 쓰는지 소스를 열어 봐야 안다면 사람들이 새 버튼을 또 만듭니다. 스토리 하나가 문서이자 시각 회귀 테스트입니다.`,
+          bad: String.raw`
+// components/ 폴더에 BaseButton, AppButton, PrimaryButton, Btn 이 공존
+`,
+          good: String.raw`
+// components/BaseButton.stories.ts
+import type { Meta, StoryObj } from '@storybook/vue3'
+import BaseButton from './BaseButton.vue'
+const meta: Meta<typeof BaseButton> = { component: BaseButton, args: { default: '저장' } }
+export default meta
+export const Primary: StoryObj<typeof meta> = { args: { variant: 'primary' } }
+export const Danger:  StoryObj<typeof meta> = { args: { variant: 'danger' } }
+export const Loading: StoryObj<typeof meta> = { args: { loading: true } }
+`,
+        },
+        {
+          id: 'l10', short: `폼 컨트롤 일관성`,
+          title: `입력 컴포넌트는 defineModel + 같은 props 계약`,
+          why: `Input, Select, Textarea 가 각각 다른 prop 이름(value, modelValue, val)을 쓰면 폼 코드가 뒤죽박죽입니다. 모두 defineModel 과 같은 props(label, error, disabled)를 받게 맞춥니다.`,
+          bad: String.raw`
+<BaseInput :value="name" @change="name = $event" />
+<BaseSelect v-model="role" />
+<BaseTextarea :text="bio" @update="bio = $event" />
+`,
+          good: String.raw`
+// 모든 폼 컨트롤이 같은 계약: v-model, label, error, disabled, id 는 자동
+const model = defineModel<string>({ required: true })
+defineProps<{ label: string; error?: string; disabled?: boolean }>()
+
+<BaseInput v-model="name" label="이름" :error="errors.name" />
+<BaseSelect v-model="role" label="역할" :options="roles" />
+<BaseTextarea v-model="bio" label="소개" />
+`,
+        },
+      ],
+    },
+    {
+      id: 'vue-18', no: 18, name: `애니메이션과 인터랙션`,
+      lead: `움직임을 넣되 느리거나 어지럽지 않게, 그리고 상태와 어긋나지 않게 하는 습관입니다.`,
+      lessons: [
+        {
+          id: 'l1', short: `무엇을 움직일지`,
+          title: `transform 과 opacity 만 움직인다`,
+          why: `width, height, top, margin 을 애니메이션하면 매 프레임 레이아웃을 다시 계산해 버벅입니다. transform 과 opacity 는 합성 단계에서 처리되어 GPU 가 맡습니다.`,
+          bad: String.raw`
+.panel { transition: height .3s, margin-left .3s, width .3s; }
+`,
+          good: String.raw`
+.panel { transition: transform .25s ease, opacity .25s ease; }
+.panel.closed { transform: translateX(-100%); opacity: 0; }
+
+/* 높이 변화가 꼭 필요하면 grid 트릭 */
+.acc { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .25s; }
+.acc.open { grid-template-rows: 1fr; }
+.acc > div { overflow: hidden; }
+`,
+        },
+        {
+          id: 'l2', short: `reduced motion`,
+          title: `prefers-reduced-motion 을 존중한다`,
+          why: `움직임에 민감한 사용자는 OS 에서 애니메이션 줄이기를 켭니다. 무시하면 어지러움을 유발합니다. 전역 한 줄로 줄이고, 의미 있는 전환은 페이드로 대체합니다.`,
+          bad: String.raw`
+/* 설정과 무관하게 항상 큰 움직임 */
+.hero { animation: fly-in 1s; }
+`,
+          good: String.raw`
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
+
+// JS 에서도
+import { usePreferredReducedMotion } from '@vueuse/core'
+const reduced = usePreferredReducedMotion()   // 'reduce' | 'no-preference'
+const duration = computed(() => reduced.value === 'reduce' ? 0 : 300)
+`,
+        },
+        {
+          id: 'l3', short: `Transition 훅`,
+          title: `JS 애니메이션은 Transition 의 훅에 연결한다`,
+          why: `라이브러리(GSAP, motion) 로 움직이면서 v-if 를 바로 바꾸면 요소가 사라져 애니메이션이 끊깁니다. Transition 의 enter/leave 훅이 done 을 부를 때까지 DOM 을 붙잡습니다.`,
+          bad: String.raw`
+function close() {
+  gsap.to(el, { opacity: 0, duration: .3 })
+  open.value = false            // 즉시 사라진다, gsap 는 허공에 대고 돈다
+}
+`,
+          good: String.raw`
+<Transition :css="false" @enter="onEnter" @leave="onLeave">
+  <div v-if="open" ref="el">...</div>
+</Transition>
+
+function onEnter(el, done) { gsap.fromTo(el, { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: .3, onComplete: done }) }
+function onLeave(el, done) { gsap.to(el, { opacity: 0, y: 12, duration: .2, onComplete: done }) }
+`,
+        },
+        {
+          id: 'l4', short: `목록 이동`,
+          title: `목록 재정렬은 TransitionGroup 의 move 클래스로 FLIP`,
+          why: `정렬이 바뀔 때 항목이 순간이동하면 사용자가 어디로 갔는지 놓칩니다. TransitionGroup 은 위치 변화를 계산해(FLIP) transform 으로 부드럽게 옮깁니다.`,
+          bad: String.raw`
+<ul><li v-for="item in sorted" :key="item.id">{{ item.name }}</li></ul>   <!-- 순간이동 -->
+`,
+          good: String.raw`
+<TransitionGroup tag="ul" name="list">
+  <li v-for="item in sorted" :key="item.id">{{ item.name }}</li>
+</TransitionGroup>
+
+<style>
+.list-move, .list-enter-active, .list-leave-active { transition: all .3s ease; }
+.list-enter-from, .list-leave-to { opacity: 0; transform: translateY(8px); }
+.list-leave-active { position: absolute; }   /* 빠지는 항목이 자리를 차지하지 않게 */
+</style>
+`,
+        },
+        {
+          id: 'l5', short: `숫자 카운트`,
+          title: `숫자 변화는 useTransition 으로 보간`,
+          why: `1,200 에서 3,400 으로 툭 바뀌면 변화를 못 느낍니다. VueUse 의 useTransition 이 중간값을 만들어 주고 이징도 고릅니다.`,
+          bad: String.raw`
+<span>{{ total }}</span>     <!-- 툭 바뀐다 -->
+`,
+          good: String.raw`
+import { useTransition, TransitionPresets } from '@vueuse/core'
+
+const total = ref(0)
+const shown = useTransition(total, { duration: 600, transition: TransitionPresets.easeOutCubic })
+<span>{{ Math.round(shown).toLocaleString() }}</span>
+`,
+        },
+        {
+          id: 'l6', short: `스크롤 등장`,
+          title: `스크롤 등장 효과는 IntersectionObserver 로`,
+          why: `scroll 이벤트에서 getBoundingClientRect 를 부르면 스크롤마다 레이아웃을 읽어 버벅입니다. IntersectionObserver 는 보일 때 한 번만 알려 줍니다.`,
+          bad: String.raw`
+window.addEventListener('scroll', () => {
+  els.forEach(el => { if (el.getBoundingClientRect().top < innerHeight) el.classList.add('in') })
+})
+`,
+          good: String.raw`
+import { useIntersectionObserver } from '@vueuse/core'
+
+const el = useTemplateRef('card')
+const shown = ref(false)
+useIntersectionObserver(el, ([entry]) => { if (entry.isIntersecting) shown.value = true }, { threshold: .2 })
+
+<div ref="card" :class="{ in: shown }">...</div>
+/* .in { opacity: 1; transform: none; transition: .4s } */
+`,
+          note: `@vueuse/motion 의 <code>v-motion</code> 디렉티브가 이 패턴을 선언형으로 제공합니다: <code>v-motion :initial="{ opacity: 0, y: 20 }" :visible-once="{ opacity: 1, y: 0 }"</code>.`,
+        },
+        {
+          id: 'l7', short: `View Transitions`,
+          title: `페이지 간 요소 연결은 View Transitions API`,
+          why: `목록의 썸네일이 상세의 큰 이미지로 이어지는 효과를 손으로 만들면 좌표 계산이 복잡합니다. 브라우저의 View Transitions 가 같은 이름의 요소를 자동으로 이어 줍니다.`,
+          bad: String.raw`
+// 클릭 시 썸네일 좌표를 재서 복제 요소를 만들어 상세 위치로 옮기는 200줄
+`,
+          good: String.raw`
+// nuxt.config.ts
+experimental: { viewTransition: true }
+
+<!-- 목록 -->
+<img :src="p.thumb" :style="{ viewTransitionName: 'photo-' + p.id }">
+<!-- 상세 -->
+<img :src="p.full" :style="{ viewTransitionName: 'photo-' + p.id }">
+
+/* 지원 안 하는 브라우저는 그냥 이동한다 */
+::view-transition-old(root), ::view-transition-new(root) { animation-duration: .25s; }
+`,
+        },
+        {
+          id: 'l8', short: `정리`,
+          title: `requestAnimationFrame 과 타이머는 반드시 정리한다`,
+          why: `애니메이션 루프를 돌리다 컴포넌트가 사라지면 루프가 허공에서 계속 돕니다. 페이지를 오갈수록 쌓여 느려집니다.`,
+          bad: String.raw`
+onMounted(() => {
+  function loop() { draw(); requestAnimationFrame(loop) }
+  loop()                       // 영원히
+})
+`,
+          good: String.raw`
+import { useRafFn } from '@vueuse/core'
+const { pause, resume } = useRafFn(draw)     // 언마운트 시 자동 정지
+
+// 직접 할 때
+let id = 0
+onMounted(() => { const loop = () => { draw(); id = requestAnimationFrame(loop) }; loop() })
+onUnmounted(() => cancelAnimationFrame(id))
+`,
+        },
+        {
+          id: 'l9', short: `스켈레톤`,
+          title: `로딩은 스피너보다 스켈레톤, 레이아웃을 흔들지 않는다`,
+          why: `스피너 뒤에 내용이 툭 나타나면 화면이 밀립니다(CLS). 내용 모양의 스켈레톤을 같은 크기로 두면 전환이 자연스럽고 레이아웃 이동이 없습니다.`,
+          bad: String.raw`
+<Spinner v-if="status === 'pending'" />
+<ProductCard v-else :product="data" />     <!-- 높이가 0 → 320px 로 튄다 -->
+`,
+          good: String.raw`
+<ProductCardSkeleton v-if="status === 'pending'" />   <!-- ProductCard 와 같은 높이 -->
+<ProductCard v-else :product="data" />
+
+/* 스켈레톤 */
+.sk { background: linear-gradient(90deg, var(--line) 25%, var(--surface) 50%, var(--line) 75%);
+      background-size: 200% 100%; animation: shimmer 1.2s infinite; }
+@keyframes shimmer { to { background-position: -200% 0 } }
+`,
+        },
+        {
+          id: 'l10', short: `드래그`,
+          title: `드래그 정렬은 라이브러리와 키보드 대안`,
+          why: `mousedown/mousemove 로 직접 만든 드래그는 터치, 스크롤, 접근성을 놓칩니다. 검증된 라이브러리를 쓰고, 위/아래 이동 버튼 같은 키보드 대안을 둡니다.`,
+          bad: String.raw`
+@mousedown="start" @mousemove="move" @mouseup="end"    <!-- 터치 안 됨, 키보드 안 됨 -->
+`,
+          good: String.raw`
+import { useSortable } from '@vueuse/integrations/useSortable'   // SortableJS
+
+const list = useTemplateRef('list')
+useSortable(list, items, { animation: 150, handle: '.grip' })
+
+<ul ref="list">
+  <li v-for="(it, i) in items" :key="it.id">
+    <span class="grip" aria-hidden="true">⋮⋮</span> {{ it.name }}
+    <button @click="move(i, -1)" aria-label="위로">↑</button>
+    <button @click="move(i, 1)" aria-label="아래로">↓</button>
+  </li>
+</ul>
+`,
+        },
+      ],
+    },
+    {
+      id: 'vue-19', no: 19, name: `Vue 2 → 3 마이그레이션`,
+      lead: `Vue 2 코드를 Vue 3 로 옮길 때 꼭 바뀌는 것들입니다. 왼쪽이 Vue 2 방식, 오른쪽이 Vue 3 방식입니다.`,
+      lessons: [
+        {
+          id: 'l1', short: `앱 생성`,
+          title: `new Vue 대신 createApp`,
+          badLabel: `✕ Vue 2`, goodLabel: `✓ Vue 3`,
+          why: `전역 Vue 객체에 플러그인과 컴포넌트를 등록하던 방식은 앱이 둘이면 서로 섞였습니다. createApp 이 만든 인스턴스에 등록합니다.`,
+          bad: String.raw`
+import Vue from 'vue'
+Vue.use(Router)
+Vue.component('MyButton', MyButton)
+Vue.prototype.$http = axios
+new Vue({ router, store, render: h => h(App) }).$mount('#app')
+`,
+          good: String.raw`
+import { createApp } from 'vue'
+const app = createApp(App)
+app.use(router).use(pinia)
+app.component('MyButton', MyButton)
+app.config.globalProperties.$http = axios     // 가능하지만 provide/inject 가 낫다
+app.mount('#app')
+`,
+        },
+        {
+          id: 'l2', short: `v-model`,
+          title: `value/input 대신 modelValue/update:modelValue, .sync 는 v-model:이름`,
+          badLabel: `✕ Vue 2`, goodLabel: `✓ Vue 3`,
+          why: `커스텀 컴포넌트의 v-model 계약이 바뀌었고, .sync 수식어는 v-model 의 인자로 합쳐졌습니다.`,
+          bad: String.raw`
+<!-- 자식 -->
+props: ['value'],
+this.$emit('input', v)
+<!-- 부모 -->
+<Child v-model="name" :title.sync="title" />
+`,
+          good: String.raw`
+<!-- 자식 -->
+const model = defineModel<string>()           // modelValue / update:modelValue
+const title = defineModel<string>('title')
+<!-- 부모 -->
+<Child v-model="name" v-model:title="title" />
+`,
+        },
+        {
+          id: 'l3', short: `필터`,
+          title: `필터는 사라졌다, 함수나 computed 로`,
+          badLabel: `✕ Vue 2`, goodLabel: `✓ Vue 3`,
+          why: `| currency 같은 필터 문법이 제거되었습니다. 그냥 함수 호출이나 computed 로 바꿉니다.`,
+          bad: String.raw`
+{{ price | currency }}
+filters: { currency(v) { return v.toLocaleString() + '원' } }
+`,
+          good: String.raw`
+{{ formatCurrency(price) }}
+
+// utils/format.ts
+export const formatCurrency = (v: number) => v.toLocaleString() + '원'
+// 전역으로 쓰려면 app.config.globalProperties.$fmt 또는 자동 import(Nuxt utils/)
+`,
+        },
+        {
+          id: 'l4', short: `이벤트 버스`,
+          title: `$on/$off 이벤트 버스는 mitt 나 상태로`,
+          badLabel: `✕ Vue 2`, goodLabel: `✓ Vue 3`,
+          why: `컴포넌트 인스턴스의 $on, $off, $once 가 제거되어 new Vue() 를 버스로 쓰던 패턴이 사라졌습니다. 대부분은 공유 상태(Pinia)로 바꾸는 것이 맞고, 정말 이벤트면 mitt 를 씁니다.`,
+          bad: String.raw`
+export const bus = new Vue()
+bus.$emit('toast', '저장됨')
+bus.$on('toast', show)
+`,
+          good: String.raw`
+// 대부분: 상태로
+const toast = useToastStore(); toast.show('저장됨')
+
+// 정말 이벤트가 필요하면
+import mitt from 'mitt'
+export const emitter = mitt<{ toast: string }>()
+emitter.emit('toast', '저장됨')
+emitter.on('toast', show); onUnmounted(() => emitter.off('toast', show))
+`,
+        },
+        {
+          id: 'l5', short: `$listeners, $children`,
+          title: `$listeners 는 $attrs 에 합쳐졌고 $children 은 없다`,
+          badLabel: `✕ Vue 2`, goodLabel: `✓ Vue 3`,
+          why: `이벤트 리스너도 $attrs 에 onXxx 로 들어옵니다. 자식 목록을 뒤지던 $children 은 사라졌으니 템플릿 ref 로 명시합니다.`,
+          bad: String.raw`
+<input v-bind="$attrs" v-on="$listeners">
+this.$children[0].reset()
+`,
+          good: String.raw`
+<input v-bind="$attrs">                    <!-- class, style, onInput 전부 포함 -->
+
+const child = useTemplateRef('child')
+child.value?.reset()                       // 자식이 defineExpose 한 것만
+`,
+        },
+        {
+          id: 'l6', short: `라이프사이클`,
+          title: `destroyed 는 unmounted, 훅 이름이 바뀌었다`,
+          badLabel: `✕ Vue 2`, goodLabel: `✓ Vue 3`,
+          why: `beforeDestroy/destroyed 가 beforeUnmount/unmounted 로 바뀌었고, Composition API 에서는 on 접두사를 붙입니다. @hook: 이벤트도 vue: 접두사로 바뀌었습니다.`,
+          bad: String.raw`
+beforeDestroy() { clearInterval(this.timer) },
+destroyed() { ... }
+<Child @hook:mounted="onChildMounted" />
+`,
+          good: String.raw`
+onBeforeUnmount(() => clearInterval(timer))
+onUnmounted(() => { ... })
+<Child @vue:mounted="onChildMounted" />
+`,
+        },
+        {
+          id: 'l7', short: `Transition 클래스`,
+          title: `v-enter 는 v-enter-from, v-leave 는 v-leave-from`,
+          badLabel: `✕ Vue 2`, goodLabel: `✓ Vue 3`,
+          why: `전환 클래스 이름이 바뀌어 옛 CSS 를 그대로 두면 애니메이션이 조용히 사라집니다.`,
+          bad: String.raw`
+.fade-enter, .fade-leave-to { opacity: 0; }
+`,
+          good: String.raw`
+.fade-enter-from, .fade-leave-to { opacity: 0; }
+.fade-enter-active, .fade-leave-active { transition: opacity .3s; }
+`,
+        },
+        {
+          id: 'l8', short: `반응성 API`,
+          title: `Vue.set / Vue.delete 와 배열 index 제한이 사라졌다`,
+          badLabel: `✕ Vue 2`, goodLabel: `✓ Vue 3`,
+          why: `Vue 3 는 Proxy 기반이라 새 속성 추가, 배열 index 대입, 삭제가 그냥 반응합니다. Vue.set 호출은 지워도 됩니다.`,
+          bad: String.raw`
+Vue.set(this.user, 'nickname', 'kim')
+Vue.set(this.list, 2, item)
+Vue.delete(this.user, 'tmp')
+`,
+          good: String.raw`
+user.nickname = 'kim'
+list.value[2] = item
+delete user.tmp
+`,
+          note: `단, Vue 3 에서도 <code>reactive</code> 를 통째로 재할당하거나 구조 분해하면 끊깁니다 (3회차 01번).`,
+        },
+        {
+          id: 'l9', short: `mixin → 컴포저블`,
+          title: `mixin 은 컴포저블로`,
+          badLabel: `✕ Vue 2`, goodLabel: `✓ Vue 3`,
+          why: `mixin 은 어디서 온 속성인지 보이지 않고 이름이 충돌합니다. 컴포저블은 import 와 구조 분해로 출처와 이름이 드러납니다.`,
+          bad: String.raw`
+export const paginationMixin = { data() { return { page: 1 } }, methods: { next() { this.page++ } } }
+export default { mixins: [paginationMixin] }     // this.page 가 어디서 왔는지 안 보인다
+`,
+          good: String.raw`
+export function usePagination(initial = 1) {
+  const page = ref(initial)
+  const next = () => page.value++
+  return { page, next }
+}
+const { page, next } = usePagination()           // 출처가 보인다, 이름은 바꿀 수 있다
+`,
+        },
+        {
+          id: 'l10', short: `점진적 전환`,
+          title: `한 번에 옮기지 말고 호환 빌드로 단계적으로`,
+          why: `큰 앱을 한 번에 옮기면 수백 개 오류가 동시에 납니다. @vue/compat 로 Vue 2 동작을 흉내내며 경고를 하나씩 지우고, 마지막에 호환 모드를 끕니다.`,
+          bad: String.raw`
+npm install vue@3     # 모든 것이 동시에 깨진다
+`,
+          good: String.raw`
+# 1. 호환 빌드 설치: Vue 2 동작을 유지하면서 Vue 3 로 실행
+npm install vue@3 @vue/compat
+# vite/webpack alias: vue → @vue/compat, compilerOptions.compatConfig: { MODE: 2 }
+
+# 2. 콘솔의 deprecation 경고를 기능별로 끈다 (configureCompat) 하나씩 고친다
+# 3. 라이브러리 교체: vuex → pinia, vue-router 3 → 4, vue-i18n 8 → 9
+# 4. MODE: 3 으로 바꾸고 @vue/compat 제거
+`,
+          lang: 'plain',
+        },
+      ],
+    },
+    {
+      id: 'vue-20', no: 20, name: `Nuxt 4 변화`,
+      lead: `Nuxt 3 에서 4 로 갈 때 바뀌는 것들입니다. 대부분은 Nuxt 3 에서도 compatibilityVersion: 4 로 미리 켤 수 있습니다.`,
+      lessons: [
+        {
+          id: 'l1', short: `app/ 디렉터리`,
+          title: `앱 코드는 app/ 아래로`, ver: `Nuxt 4`,
+          badLabel: `✕ Nuxt 3 구조`, goodLabel: `✓ Nuxt 4 구조`,
+          why: `pages, components, composables 가 루트에 server, public, nuxt.config 와 섞여 있던 것을 app/ 로 모읍니다. IDE 와 파일 감시 범위가 좁아지고 서버 코드와 명확히 나뉩니다.`,
+          bad: String.raw`
+nuxt.config.ts
+app.vue
+pages/
+components/
+composables/
+server/
+public/
+`,
+          good: String.raw`
+nuxt.config.ts
+app/
+  app.vue
+  pages/
+  components/
+  composables/
+  layouts/
+  middleware/
+  utils/
+server/
+shared/        # 클라이언트와 서버가 함께 쓰는 타입, 스키마 (자동 import: shared/utils, shared/types)
+public/
+`,
+          note: `마이그레이션: <code>npx codemod@latest nuxt/4/migration-recipe</code> 가 파일 이동을 해 줍니다. Nuxt 3.12+ 에서는 <code>future: { compatibilityVersion: 4 }</code> 로 미리 적용할 수 있습니다.`,
+        },
+        {
+          id: 'l2', short: `data 기본값`,
+          title: `useFetch 의 data 기본값은 null 이 아니라 undefined`, ver: `Nuxt 4`,
+          badLabel: `✕ Nuxt 3`, goodLabel: `✓ Nuxt 4`,
+          why: `data.value === null 로 검사하던 코드는 Nuxt 4 에서 항상 false 가 됩니다. 값이 있는지 보려면 truthy 검사나 undefined 비교로 바꿉니다.`,
+          bad: String.raw`
+const { data } = await useFetch('/api/user')
+if (data.value === null) showEmpty()       // Nuxt 4 에서는 undefined 라 안 걸린다
+`,
+          good: String.raw`
+const { data } = await useFetch('/api/user')
+if (!data.value) showEmpty()
+
+// 기본값을 직접 정하면 둘 다 안전
+const { data: items } = await useFetch('/api/items', { default: () => [] })
+`,
+        },
+        {
+          id: 'l3', short: `얕은 반응성`,
+          title: `data 는 shallowRef 다, 안쪽을 고치면 반응하지 않는다`, ver: `Nuxt 4`,
+          badLabel: `✕ Nuxt 3 습관`, goodLabel: `✓ Nuxt 4`,
+          why: `성능을 위해 useFetch/useAsyncData 의 data 가 깊은 반응성을 갖지 않습니다. data.value.items.push 는 화면을 갱신하지 않습니다. 통째로 교체하거나 deep 옵션을 켭니다.`,
+          bad: String.raw`
+const { data } = await useFetch('/api/todos')
+data.value.items.push(newTodo)            // Nuxt 4: 화면이 안 바뀐다
+`,
+          good: String.raw`
+data.value = { ...data.value, items: [...data.value.items, newTodo] }   // 교체
+// 또는 서버에 반영한 뒤 refresh()
+// 정말 깊은 반응성이 필요하면
+const { data } = await useFetch('/api/todos', { deep: true })
+`,
+        },
+        {
+          id: 'l4', short: `pending → status`,
+          title: `pending 대신 status 를 쓴다`, ver: `Nuxt 4`,
+          badLabel: `✕ Nuxt 3`, goodLabel: `✓ Nuxt 4`,
+          why: `pending 은 폐기 예정입니다. 'idle' | 'pending' | 'success' | 'error' 네 상태를 가진 status 가 immediate: false 같은 경우까지 정확히 표현합니다.`,
+          bad: String.raw`
+const { data, pending } = await useFetch('/api/items')
+<Spinner v-if="pending" />
+`,
+          good: String.raw`
+const { data, status } = await useFetch('/api/items')
+<Spinner v-if="status === 'pending'" />
+<ErrorBox v-else-if="status === 'error'" />
+<List v-else :items="data" />
+`,
+        },
+        {
+          id: 'l5', short: `키 공유`,
+          title: `같은 키의 useAsyncData 는 옵션도 같아야 한다`, ver: `Nuxt 4`,
+          why: `Nuxt 4 는 같은 키를 쓰는 호출이 핸들러와 옵션(transform, pick, deep 등)을 공유합니다. 다르면 개발 모드 경고가 납니다. 키마다 컴포저블 하나로 묶으면 안전합니다.`,
+          bad: String.raw`
+// A.vue
+useAsyncData('users', () => $fetch('/api/users'), { transform: pickNames })
+// B.vue
+useAsyncData('users', () => $fetch('/api/users'))        // 같은 키, 다른 옵션: 경고
+`,
+          good: String.raw`
+// composables/useUsers.ts
+export const useUsers = () => useAsyncData('users', () => $fetch('/api/users'), { transform: pickNames })
+// A.vue, B.vue 모두 useUsers() 를 부른다. 결과와 요청이 공유된다
+`,
+        },
+        {
+          id: 'l6', short: `라우트 메타 스캔`,
+          title: `definePageMeta 는 정적으로 분석된다, 변수 참조 금지`, ver: `Nuxt 4`,
+          why: `페이지 메타는 빌드 때 파일에서 추출됩니다. 변수나 import 한 값을 넣으면 추출이 안 되거나 Nuxt 4 에서 오류가 납니다. 리터럴로 적습니다.`,
+          bad: String.raw`
+const layout = isAdmin ? 'admin' : 'default'
+definePageMeta({ layout, middleware: authMiddleware })   // 변수 참조
+`,
+          good: String.raw`
+definePageMeta({ layout: 'admin', middleware: ['auth'] })   // 리터럴만
+
+// 동적으로 바꾸려면 setPageLayout() 또는 <NuxtLayout :name="layout">
+`,
+        },
+        {
+          id: 'l7', short: `컴포넌트 이름`,
+          title: `컴포넌트 이름은 파일 경로 기준으로 정규화된다`, ver: `Nuxt 4`,
+          why: `components/MyButton/MyButton.vue 가 MyButtonMyButton 이 아니라 MyButton 이 되는 규칙은 같지만, 이름과 경로가 다르면 Nuxt 4 가 경로 기준 이름을 씁니다. 파일 이름이 곧 컴포넌트 이름이라 생각하면 됩니다.`,
+          bad: String.raw`
+// components/form/input.vue 안에서
+defineOptions({ name: 'MyInput' })
+<MyInput />              // Nuxt 4: 찾지 못한다 (등록 이름은 FormInput)
+`,
+          good: String.raw`
+// components/form/Input.vue → <FormInput />
+<FormInput />
+// 이름을 바꾸고 싶으면 파일을 옮긴다. defineOptions name 은 devtools 표시용으로만
+`,
+        },
+        {
+          id: 'l8', short: `shared/`,
+          title: `클라이언트와 서버가 같이 쓰는 코드는 shared/`, ver: `Nuxt 4`,
+          why: `zod 스키마나 타입을 server/ 와 app/ 양쪽에서 import 하려면 어느 쪽에도 속하지 않는 자리가 필요합니다. shared/utils 와 shared/types 는 양쪽에서 자동 import 됩니다.`,
+          bad: String.raw`
+// app/utils/schemas.ts 를 server/api 에서 import   → 서버 번들이 app 코드를 끌어온다
+`,
+          good: String.raw`
+shared/
+  utils/validate.ts      # 양쪽에서 자동 import
+  types/user.ts
+// 명시 import 는 #shared 별칭
+import { UserSchema } from '#shared/utils/validate'
+`,
+        },
+        {
+          id: 'l9', short: `TS 프로젝트 분리`,
+          title: `타입 검사가 app, server, shared 로 나뉜다`, ver: `Nuxt 4`,
+          why: `서버 코드에서 Vue 전역(useRoute 등)이 보이거나 그 반대였던 것이 Nuxt 4 에서는 tsconfig 가 분리되어 각자 맞는 전역만 보입니다. 잘못된 import 가 타입 오류로 드러납니다.`,
+          bad: String.raw`
+// server/api/x.ts
+const route = useRoute()            // Nuxt 3: 타입은 통과, 실행하면 터짐
+`,
+          good: String.raw`
+// Nuxt 4: 서버 프로젝트에는 useRoute 가 없어 타입 오류
+// 서버에서 요청 정보는 event 로
+export default defineEventHandler((event) => getRouterParams(event))
+
+// tsconfig.json 은 .nuxt/tsconfig.app.json, .nuxt/tsconfig.server.json 등을 참조한다
+`,
+        },
+        {
+          id: 'l10', short: `compatibilityDate`,
+          title: `compatibilityDate 를 꼭 적는다`, ver: `Nuxt 3.12+`,
+          why: `Nitro 와 Nuxt 는 동작 변경을 날짜 기준으로 묶습니다. 날짜가 없으면 옛 동작으로 묶이거나 빌드마다 경고가 납니다. 새 프로젝트는 오늘 날짜, 업그레이드할 때 한 번에 올립니다.`,
+          bad: String.raw`
+export default defineNuxtConfig({ modules: [...] })   // compatibilityDate 없음: 경고, 옛 동작
+`,
+          good: String.raw`
+export default defineNuxtConfig({
+  compatibilityDate: '2025-07-15',
+  future: { compatibilityVersion: 4 },     // Nuxt 3 에서 4 동작 미리 적용
+  modules: [...]
+})
+`,
+        },
+      ],
+    },
     // @@APPEND@@ 새 회차는 이 줄 위에 추가
   ],
   // 다음에 만들 묶음 예고. 없으면 null.
   upcoming: {
-    name: `101~200번 후보 주제`,
+    name: `201~300번 후보 주제`,
     items: [
-      `TypeScript 깊이 (타입 추론, 유틸리티 타입)`,
-      `폼과 검증 (VeeValidate, zod)`,
-      `인증과 세션 (nuxt-auth-utils)`,
-      `다국어 i18n`,
-      `렌더링 모드 (SSR, SSG, ISR, SPA)`,
-      `Nuxt 모듈과 레이어 만들기`,
-      `UI 라이브러리와 디자인 시스템`,
-      `애니메이션과 인터랙션`,
-      `Vue 2 → 3 마이그레이션`,
-      `Nuxt 4 변화 (app/ 디렉터리, 데이터 가져오기)`,
+      `E2E 테스트 (Playwright)`,
+      `접근성 (a11y) 점검`,
+      `성능 측정과 Core Web Vitals`,
+      `실시간 (WebSocket, SSE)`,
+      `파일 업로드와 이미지 처리`,
+      `데이터 테이블과 페이지네이션 패턴`,
+      `에러 처리, 로깅, 모니터링`,
+      `보안 (CSP, XSS, 의존성 점검)`,
+      `모노레포와 패키지 구조`,
+      `면접 단골 질문`,
     ],
   },
 };

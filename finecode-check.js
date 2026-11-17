@@ -57,6 +57,7 @@
     var listUrl = root.getAttribute('data-list-url') || 'index.html';
     var laterUrl = root.getAttribute('data-later-url') || 'later.html';
     var sessions = DATA.sessions;
+    var BRAND = DATA.brand || T.brand;         // 데이터가 brand 를 주면 '파인코드 스터디' 대신 쓴다
     var LAST = 'finecode:last' + (DATA.key ? ':' + DATA.key : '');   // 마지막으로 본 회차 (과목마다 따로)
 
     // ================= 저장 =================
@@ -343,7 +344,7 @@
       var s = cur;
       var html = tabsHtml(s) +
         '<header>' +
-          '<div class="eyebrow">' + (DATA.subject ? DATA.subject + ' · ' : '') + T.brand + '</div>' +
+          '<div class="eyebrow">' + (DATA.subject ? DATA.subject + ' · ' : '') + BRAND + '</div>' +
           '<h1>' + T.heading(s) + '</h1>' +
           '<p class="lead">' + s.lead + '</p>' +
           '<nav class="toc">' + s.lessons.map(function (l, i) {
@@ -357,7 +358,7 @@
           DATA.upcoming.items.map(function (it) { return '<li>' + it + '</li>'; }).join('') + '</ul></div>';
       }
       root.innerHTML = html;
-      document.title = (DATA.subject ? DATA.subject + ' ' : '') + T.brand + ' · ' + T.session(s);
+      document.title = (DATA.subject ? DATA.subject + ' ' : '') + BRAND + ' · ' + T.session(s);
       refresh();
       revealActiveTab();
     }
@@ -414,7 +415,7 @@
       if (!body) body = '<div class="empty"><strong>' + T.emptyTitle + '</strong>' + T.emptyBody + '</div>';
       root.innerHTML = tabsHtml(null) +
         '<header>' +
-          '<div class="eyebrow">' + (DATA.subject ? DATA.subject + ' · ' : '') + T.brand + '</div>' +
+          '<div class="eyebrow">' + (DATA.subject ? DATA.subject + ' · ' : '') + BRAND + '</div>' +
           '<h1>' + T.later + '</h1>' +
           '<p class="lead">' + T.laterLead + '</p>' +
           statusHtml(false) +
