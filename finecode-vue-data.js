@@ -4316,22 +4316,2331 @@ export default defineNuxtConfig({
         },
       ],
     },
+    {
+      id: 'vue-21', no: 21, name: `E2E 테스트 (Playwright)`,
+      lead: `실제 브라우저로 사용자 흐름을 검증하는 습관입니다. 어떤 셀렉터를 쓰고, 무엇을 기다리고, 무엇을 모킹하고, 테스트를 어떻게 독립시키는지가 E2E 의 전부입니다. 코드 묶음은 실무 코드 20회차에 있습니다.`,
+      lessons: [
+        {
+          id: 'l1', short: `셀렉터`,
+          title: `CSS 클래스가 아니라 역할과 라벨로 찾는다`,
+          why: `.btn-primary 는 스타일 리팩터링 한 번에 깨집니다. getByRole('button', { name: '저장' }) 은 사용자가 보는 것과 같아서 구현이 바뀌어도 살아남고, 그 자체로 접근성 검사도 됩니다. 꼭 필요한 곳만 data-testid.`,
+          bad: String.raw`
+await page.click('.form > div:nth-child(3) .btn-primary')
+await page.fill('#input-7', 'hello')
+await page.locator('div.card').nth(2).click()
+`,
+          good: String.raw`
+await page.getByRole('button', { name: '저장' }).click()
+await page.getByLabel('이메일').fill('hello@example.com')
+await page.getByRole('link', { name: '주문 내역' }).click()
+
+// 역할·라벨로 못 집는 것만 testid (동적 숫자, 반복 카드)
+await expect(page.getByTestId('order-total')).toHaveText('15,000원')
+`,
+          note: `우선순위: getByRole → getByLabel → getByPlaceholder → getByText → getByTestId → CSS. 역할로 못 잡힌다면 마크업에 라벨이나 role 이 빠진 것일 수 있습니다 (22회차).`,
+        },
+        {
+          id: 'l2', short: `기다림`,
+          title: `sleep 으로 기다리지 않는다. locator 와 expect 가 알아서 기다린다`,
+          why: `waitForTimeout(2000) 은 느린 환경에서는 모자라고 빠른 환경에서는 낭비입니다. Playwright 의 액션과 expect 는 조건이 될 때까지 자동으로 재시도합니다. 값을 한 번 읽어 비교하는 코드도 재시도가 없어 플래키해집니다.`,
+          bad: String.raw`
+await page.click('text=저장')
+await page.waitForTimeout(2000)                       // 운에 맡기는 2초
+expect(await page.locator('.toast').textContent()).toBe('저장했습니다')   // 한 번만 읽는다
+await page.waitForLoadState('networkidle')          // 폴링·SSE 가 있으면 영원히 안 온다
+`,
+          good: String.raw`
+await page.getByRole('button', { name: '저장' }).click()
+await expect(page.getByRole('status')).toHaveText('저장했습니다')   // 나타날 때까지 재시도 (expect.timeout)
+
+// 비동기 상태 값은 expect.poll
+await expect.poll(() => api.getOrder(id).then((o) => o.status)).toBe('PAID')
+
+// 페이지 로드는 "무엇이 보이면 된 것" 으로
+await page.goto('/orders')
+await expect(page.getByRole('heading', { name: '주문 내역' })).toBeVisible()
+`,
+        },
+        {
+          id: 'l3', short: `테스트 독립`,
+          title: `테스트는 자기 데이터를 만들고, 순서에 기대지 않는다`,
+          why: `"1번 테스트가 만든 상품을 2번이 수정" 하면 1번이 실패하거나 병렬로 돌 때 2번도 깨집니다. 각 테스트가 API 로 자기 데이터를 만들고 고유값을 쓰면 어떤 순서·어떤 워커에서도 같은 결과입니다.`,
+          bad: String.raw`
+test('상품을 만든다', async ({ page }) => { ... '테스트 상품' 생성 })
+test('상품을 수정한다', async ({ page }) => { ... '테스트 상품' 을 찾아 수정 })   // 1번에 의존
+test.describe.configure({ mode: 'serial' })        // 순서 강제로 덮는다
+`,
+          good: String.raw`
+test('상품을 수정한다', async ({ page, api }) => {
+  const p = await api.createProduct({ name: 'E2E ' + Date.now() })   // 픽스처로 API 호출: 빠르고 독립적
+  await page.goto('/admin/products/' + p.id)
+  await page.getByLabel('상품명').fill(p.name + ' (수정)')
+  await page.getByRole('button', { name: '저장' }).click()
+  await expect(page.getByRole('status')).toHaveText('저장했습니다')
+})
+// 전체 초기화는 setup 프로젝트에서 한 번 (reset + seed). 한 흐름을 검증해야 하면 한 테스트 안의 test.step 으로
+`,
+        },
+        {
+          id: 'l4', short: `로그인 재사용`,
+          title: `로그인은 setup 에서 한 번, 테스트는 storageState 로 시작한다`,
+          why: `테스트마다 로그인 화면을 거치면 느리고 로그인 자체가 플래키 원인이 됩니다. setup 프로젝트가 API 로 로그인해 쿠키를 저장하면 각 테스트는 로그인된 상태에서 바로 시작합니다. 로그인 UI 자체는 테스트 한 개로 따로.`,
+          bad: String.raw`
+test.beforeEach(async ({ page }) => {
+  await page.goto('/login')
+  await page.getByLabel('이메일').fill('user@example.com')
+  await page.getByLabel('비밀번호').fill('pass')
+  await page.getByRole('button', { name: '로그인' }).click()    // 테스트 200개 × 3초
+})
+`,
+          good: String.raw`
+// e2e/global.setup.ts
+setup('login', async ({ request }) => {
+  await request.post('/api/auth/login', { data: { email, password } })
+  await request.storageState({ path: 'e2e/.auth/user.json' })
+})
+// playwright.config.ts
+projects: [{ name: 'setup', testMatch: /global\.setup\.ts/ },
+           { name: 'chromium', use: { storageState: 'e2e/.auth/user.json' }, dependencies: ['setup'] }]
+
+// 비로그인 테스트만 비운다
+test.use({ storageState: { cookies: [], origins: [] } })
+`,
+        },
+        {
+          id: 'l5', short: `모킹 범위`,
+          title: `외부 서비스와 실패 케이스만 모킹하고, 우리 API 는 진짜로 부른다`,
+          why: `우리 백엔드까지 전부 page.route 로 꾸미면 E2E 가 아니라 프론트 단위 테스트가 됩니다. 결제 PG·지도·메일 같은 외부와, 500·느린 응답처럼 실제로 만들기 어려운 상황만 모킹합니다.`,
+          bad: String.raw`
+await page.route('**/api/**', (route) => route.fulfill({ json: FIXTURES[route.request().url()] }))
+// 모든 API 가 가짜: 서버 검증·DB·권한이 실제로 동작하는지는 아무도 모른다
+`,
+          good: String.raw`
+// 외부 SDK 는 스텁으로
+await page.route('https://js.tosspayments.com/**', (r) => r.fulfill({ contentType: 'application/javascript', body: FAKE_SDK }))
+// 실패 케이스는 딱 그 요청만, 한 번만
+await page.route('**/api/products?*', (r) => r.fulfill({ status: 500, json: {} }), { times: 1 })
+await page.goto('/products')
+await expect(page.getByText('목록을 불러오지 못했습니다')).toBeVisible()
+await page.getByRole('button', { name: '다시 시도' }).click()       // 두 번째는 진짜 서버
+await expect(page.getByTestId('product-card').first()).toBeVisible()
+`,
+          note: `서버 쪽에서 외부를 부르는 것(PG 승인 API) 은 브라우저 route 로 못 잡습니다. 서버가 E2E 모드 플래그로 스텁 구현을 쓰게 합니다.`,
+        },
+        {
+          id: 'l6', short: `검증 수준`,
+          title: `UI 만 보지 말고, 결과가 서버에 남았는지도 확인한다`,
+          why: `"저장했습니다" 토스트가 떴다고 저장된 것은 아닙니다. 낙관적 업데이트는 실패해도 토스트가 뜰 수 있습니다. 중요한 흐름은 API 나 다음 화면으로 결과를 다시 읽어 확인합니다.`,
+          bad: String.raw`
+await page.getByRole('button', { name: '주문하기' }).click()
+await expect(page.getByText('주문이 완료되었습니다')).toBeVisible()
+// 끝. 주문이 실제로 PAID 인지, 재고가 줄었는지는 모른다
+`,
+          good: String.raw`
+await page.getByRole('button', { name: '주문하기' }).click()
+await expect(page).toHaveURL(/\/orders\/ORD-/)
+const orderId = page.url().split('/').pop()!
+
+// 서버 상태로 확인
+const order = await api.getOrder(orderId)
+expect(order.status).toBe('PAID')
+expect(order.lines[0].qty).toBe(2)
+
+// 또는 새로고침 후에도 보이는지 (낙관적 UI 가 아니라 진짜 저장)
+await page.reload()
+await expect(page.getByText('결제 완료')).toBeVisible()
+`,
+        },
+        {
+          id: 'l7', short: `시각 회귀`,
+          title: `스크린샷 비교는 핵심 화면 몇 장만, 동적 영역은 가린다`,
+          why: `모든 페이지를 찍으면 날짜·아바타·광고 때문에 매번 깨지고, 아무도 diff 를 안 보게 됩니다. 레이아웃 뼈대와 디자인 시스템 컴포넌트, 주요 페이지 5~10장이면 CSS 사고는 잡힙니다.`,
+          bad: String.raw`
+for (const path of ALL_ROUTES) {
+  test(path, async ({ page }) => { await page.goto(path); await expect(page).toHaveScreenshot() })
+}
+// 120장. 날짜가 바뀌면 40장이 깨지고, 폰트 로드 타이밍으로 또 10장
+`,
+          good: String.raw`
+test('상품 상세', async ({ page }) => {
+  await page.goto('/products/p1')
+  await page.evaluate(() => document.fonts.ready)                   // 웹폰트 로드 뒤에
+  await expect(page).toHaveScreenshot('product-detail.png', {
+    fullPage: true,
+    mask: [page.getByTestId('review-date'), page.getByTestId('recommend')],   // 동적 영역
+    maxDiffPixelRatio: 0.01
+  })
+})
+// config: expect.toHaveScreenshot.animations = 'disabled', 스냅샷은 CI 와 같은 OS(linux) 에서 생성
+`,
+        },
+        {
+          id: 'l8', short: `단계와 이름`,
+          title: `테스트 이름은 사용자 문장으로, 긴 흐름은 test.step 으로 나눈다`,
+          why: `'test1', 'should work' 는 실패 리포트에서 아무 정보가 없습니다. "잘못된 비밀번호면 오류를 보여 준다" 처럼 쓰면 리포트가 명세가 됩니다. 긴 흐름은 step 으로 나눠야 어디서 멈췄는지 보입니다.`,
+          bad: String.raw`
+test('checkout', async ({ page }) => {
+  // 60줄: 장바구니 → 쿠폰 → 결제 → 완료. 실패하면 "checkout failed at line 41"
+})
+`,
+          good: String.raw`
+test('쿠폰을 적용하고 결제하면 할인된 금액으로 주문된다', async ({ page, checkout }) => {
+  await test.step('장바구니에 상품 2개', async () => { ... })
+  await test.step('쿠폰 적용 시 합계가 10% 줄어든다', async () => {
+    await checkout.applyCoupon('WELCOME10')
+    await expect(checkout.total()).toHaveText('13,500원')
+  })
+  await test.step('결제 완료 페이지로 이동', async () => { ... })
+})
+// 리포트: ✓ 장바구니에 상품 2개  ✗ 쿠폰 적용 시 합계가 10% 줄어든다 (스크린샷 첨부)
+`,
+        },
+        {
+          id: 'l9', short: `CI 설계`,
+          title: `빌드 결과로 돌리고, 샤딩하고, 실패 시 trace 를 남긴다`,
+          why: `dev 서버로 돌리면 운영과 다르고 HMR 이 테스트를 흔듭니다. 빌드 한 번 → 샤드 N 개가 나눠 실행 → 실패한 것만 trace·스크린샷 업로드. 재시도는 브라우저 크래시 같은 외부 요인용이지 플래키 테스트를 숨기는 용도가 아닙니다.`,
+          bad: String.raw`
+- run: npm run dev &            # dev 서버에 대고
+- run: npx playwright test      # 한 머신에서 25분
+  # 실패하면 로그만 남는다. retries: 5 로 "통과시킨다"
+`,
+          good: String.raw`
+# build job: npm run build → .output 을 artifact 로
+# e2e job (matrix shard 1..3):
+- run: node .output/server/index.mjs &  # 빌드 결과 (webServer 설정으로 대신해도 된다)
+- run: npx playwright test --shard=\${{ matrix.shard }}/3
+  env: { CI: true }                      # retries: 2, trace: on-first-retry, forbidOnly
+- uses: actions/upload-artifact@v4
+  if: failure()
+  with: { path: test-results }           # trace.zip → npx playwright show-trace 로 재생
+# PR 에는 스모크(핵심 흐름 5분) 만, 전체는 main 머지 후·야간
+`,
+        },
+        {
+          id: 'l10', short: `플래키 관리`,
+          title: `가끔 실패하는 테스트는 끄지 말고 원인을 셋 중 하나로 분류한다`,
+          why: `test.skip 으로 덮으면 커버리지가 조용히 줄고, retries 를 올리면 느려지면서 문제는 남습니다. 플래키의 원인은 거의 셋입니다. 고정 대기(02번), 데이터 공유(03번), 네트워크 타이밍 의존. --repeat-each 로 재현하고 원인별로 고칩니다.`,
+          bad: String.raw`
+test.skip('가끔 깨짐', async () => { ... })        // 영원히 skip
+retries: 5                                          // 통과할 때까지
+test.fixme('나중에')                                // 나중은 오지 않는다
+`,
+          good: String.raw`
+# 재현: 10번 돌려 1번이라도 실패하면 플래키
+npx playwright test signup --repeat-each 10 --workers 4
+
+# trace 로 원인 확인 → 분류
+#  1) 대기 문제: textContent() 한 번 읽기, waitForTimeout → expect 재시도로
+#  2) 데이터 공유: 같은 이메일·같은 상품 → Date.now() 고유값, API 로 생성
+#  3) 타이밍: 응답 순서 가정 → waitForResponse 로 특정 요청을 기다리거나, 결과 상태로 검증
+
+# 리포트의 flaky 목록(재시도로 통과) 을 주 1회 비운다. 원인 못 찾으면 skip 대신 test.fail 로 "알려진 실패" 표시 + 이슈 링크
+`,
+        },
+      ],
+    },
+    {
+      id: 'vue-22', no: 22, name: `접근성 (a11y) 점검`,
+      lead: `키보드와 스크린리더로도 쓸 수 있는 화면을 만드는 습관입니다. 대부분은 올바른 HTML 요소를 쓰는 것으로 끝나고, Vue 에서 특히 신경 쓸 곳은 포커스 관리와 동적 알림입니다.`,
+      lessons: [
+        {
+          id: 'l1', short: `시맨틱 요소`,
+          title: `클릭되는 것은 button, 이동하는 것은 a. div 에 @click 을 달지 않는다`,
+          why: `div 는 키보드로 포커스되지 않고 Enter·Space 로 눌리지 않으며 스크린리더가 "버튼" 이라고 읽지 않습니다. button 과 a 는 이걸 공짜로 줍니다. 스타일이 문제면 CSS 로 초기화합니다.`,
+          bad: String.raw`
+<div class="btn" @click="save">저장</div>
+<span class="link" @click="router.push('/orders')">주문 내역</span>
+<div class="card" @click="open(item)">...</div>
+`,
+          good: String.raw`
+<button type="button" class="btn" @click="save">저장</button>
+<NuxtLink to="/orders" class="link">주문 내역</NuxtLink>
+
+<!-- 카드 전체 클릭: 안에 진짜 링크를 두고 CSS 로 영역을 넓힌다 -->
+<article class="card">
+  <h3><NuxtLink :to="'/items/' + item.id" class="stretched">{{ item.name }}</NuxtLink></h3>
+</article>
+<style>.card { position: relative } .stretched::after { content: ''; position: absolute; inset: 0 }</style>
+`,
+          note: `정말 div 를 써야 한다면 <code>role="button" tabindex="0" @keydown.enter @keydown.space.prevent</code> 를 전부 붙여야 합니다. 그럴 바엔 button 이 낫습니다.`,
+        },
+        {
+          id: 'l2', short: `라벨`,
+          title: `모든 입력에는 연결된 label 이 있다. placeholder 는 라벨이 아니다`,
+          why: `placeholder 는 입력하면 사라지고 스크린리더가 라벨로 읽지 않는 경우가 많습니다. label for / id 로 연결하면 라벨 클릭으로 포커스도 되고, E2E 의 getByLabel 도 동작합니다. 아이콘만 있는 입력은 aria-label.`,
+          bad: String.raw`
+<input v-model="email" placeholder="이메일">
+<div>비밀번호</div><input v-model="pw" type="password">   <!-- 연결 안 됨 -->
+<input type="search" placeholder="검색">
+`,
+          good: String.raw`
+<script setup lang="ts">
+const id = useId()                      <!-- 3.5+: SSR 에서도 안정적인 고유 id -->
+</script>
+<label :for="id">이메일</label>
+<input :id="id" v-model="email" type="email" autocomplete="email">
+
+<!-- 라벨을 시각적으로 숨길 때도 DOM 에는 둔다 -->
+<label :for="id + '-q'" class="sr-only">검색</label>
+<input :id="id + '-q'" type="search" placeholder="상품명, 브랜드">
+
+<!-- 컴포넌트로 감싸면 label/id 연결을 컴포넌트가 책임진다 -->
+<FormField label="비밀번호" v-slot="{ id }"><input :id="id" type="password" autocomplete="current-password"></FormField>
+`,
+        },
+        {
+          id: 'l3', short: `아이콘 버튼`,
+          title: `아이콘만 있는 버튼에는 aria-label, 장식 아이콘에는 aria-hidden`,
+          why: `× 버튼, 종 아이콘, 햄버거 메뉴는 스크린리더에 "버튼" 으로만 읽힙니다. 무슨 버튼인지 aria-label 로 알려 줍니다. 텍스트 옆의 장식 아이콘은 읽히지 않게 숨깁니다. SVG 안의 title 은 브라우저마다 다르게 읽혀 믿을 수 없습니다.`,
+          bad: String.raw`
+<button @click="close"><IconX /></button>
+<button @click="toggleMenu"><svg>...</svg></button>
+<button><IconTrash /> 삭제</button>       <!-- "삭제 삭제" 또는 아이콘 이름이 읽힐 수 있다 -->
+`,
+          good: String.raw`
+<button type="button" aria-label="닫기" @click="close"><IconX aria-hidden="true" /></button>
+<button type="button" aria-label="메뉴 열기" :aria-expanded="open" @click="toggleMenu"><IconMenu aria-hidden="true" /></button>
+<button type="button"><IconTrash aria-hidden="true" /> 삭제</button>
+
+<!-- 상태가 바뀌는 버튼은 라벨도 바뀐다 -->
+<button type="button" :aria-label="liked ? '좋아요 취소' : '좋아요'" :aria-pressed="liked" @click="toggle">
+  <IconHeart aria-hidden="true" :filled="liked" />
+</button>
+`,
+          note: `아이콘 컴포넌트는 기본으로 <code>aria-hidden="true" focusable="false"</code> 를 갖게 만들어 두면 매번 안 붙여도 됩니다.`,
+        },
+        {
+          id: 'l4', short: `포커스 관리`,
+          title: `모달을 열면 안으로, 닫으면 열었던 버튼으로 포커스를 보낸다`,
+          why: `모달이 열렸는데 포커스가 뒤에 남아 있으면 키보드 사용자는 모달을 찾지 못하고, 닫혔는데 포커스가 body 로 가면 처음부터 다시 탭해야 합니다. 포커스 가두기(trap) 와 복귀는 모달 컴포넌트가 책임집니다.`,
+          bad: String.raw`
+<div v-if="open" class="modal">
+  <h2>리뷰 쓰기</h2>
+  <textarea v-model="text" />
+  <button @click="open = false">닫기</button>
+</div>
+<!-- 포커스는 여전히 "리뷰 쓰기" 버튼 뒤의 어딘가. Tab 하면 모달 뒤 페이지를 돈다 -->
+`,
+          good: String.raw`
+<script setup lang="ts">
+import { useFocusTrap } from '@vueuse/integrations/useFocusTrap'
+const open = defineModel<boolean>()
+const panel = useTemplateRef('panel')
+const { activate, deactivate } = useFocusTrap(panel, { immediate: false, escapeDeactivates: false })
+let opener: HTMLElement | null = null
+watch(open, async (v) => {
+  if (v) { opener = document.activeElement as HTMLElement; await nextTick(); activate(); panel.value?.querySelector<HTMLElement>('[autofocus], input, textarea, button')?.focus() }
+  else { deactivate(); opener?.focus() }                       // 열었던 버튼으로 복귀
+})
+</script>
+<template>
+  <Teleport to="body">
+    <div v-if="open" ref="panel" role="dialog" aria-modal="true" :aria-labelledby="titleId" @keydown.esc="open = false">
+      <h2 :id="titleId">리뷰 쓰기</h2>
+      <textarea autofocus />
+      <button type="button" @click="open = false">닫기</button>
+    </div>
+  </Teleport>
+</template>
+`,
+          note: `네이티브 <code>&lt;dialog&gt;</code> 요소의 <code>showModal()</code> 은 포커스 가두기와 Esc 를 브라우저가 해 줍니다. 복귀 포커스만 챙기면 됩니다.`,
+        },
+        {
+          id: 'l5', short: `라우트 전환`,
+          title: `SPA 페이지 이동 후에는 제목을 바꾸고 포커스를 본문 시작으로 옮긴다`,
+          why: `전체 새로고침과 달리 SPA 이동은 스크린리더에게 아무 일도 안 일어난 것처럼 보입니다. 포커스는 눌렀던 링크에 남고, 페이지 제목도 그대로일 수 있습니다. 제목 갱신 + 본문 h1 으로 포커스 이동 + 알림 한 줄이면 됩니다.`,
+          bad: String.raw`
+// NuxtLink 만 쓰고 끝. 포커스는 헤더의 링크에 남아 있고 document.title 은 안 바뀐다
+`,
+          good: String.raw`
+// plugins/route-announcer.client.ts
+export default defineNuxtPlugin((nuxtApp) => {
+  const router = useRouter()
+  router.afterEach((to) => {
+    nextTick(() => {
+      const h1 = document.querySelector<HTMLElement>('main h1')
+      if (h1) { h1.tabIndex = -1; h1.focus({ preventScroll: false }) }   // 본문 시작으로
+      else document.getElementById('main')?.focus()
+      announce((document.title || to.path) + ' 페이지로 이동했습니다')       // 08번 aria-live
+    })
+  })
+})
+// 각 페이지는 useHead({ title }) 또는 useSeoMeta 로 제목을 바꾼다. Nuxt 의 <NuxtRouteAnnouncer /> 를 app.vue 에 두면 알림 부분은 자동
+// layouts: <a href="#main" class="skip-link">본문으로 건너뛰기</a> + <main id="main" tabindex="-1">
+`,
+        },
+        {
+          id: 'l6', short: `색과 대비`,
+          title: `상태를 색으로만 표현하지 않고, 대비는 4.5:1 을 지킨다`,
+          why: `빨간 테두리만으로 오류를 알리면 색각 이상 사용자와 스크린리더는 모릅니다. 아이콘이나 텍스트를 같이 둡니다. 회색 placeholder·보조 텍스트는 대비가 쉽게 3:1 아래로 떨어집니다. 디자인 토큰 단계에서 검사해 두면 페이지마다 안 봐도 됩니다.`,
+          bad: String.raw`
+<input :class="{ error: invalid }">              <!-- 빨간 테두리만 -->
+<span :style="{ color: ok ? 'green' : 'red' }">●</span>   <!-- 점 색만 -->
+<p style="color: #bbb">보조 설명</p>              <!-- 흰 배경에 2.1:1 -->
+`,
+          good: String.raw`
+<input :class="{ error: invalid }" :aria-invalid="invalid" :aria-describedby="invalid ? errId : undefined">
+<p v-if="invalid" :id="errId" class="error-text"><IconAlert aria-hidden="true" /> 이메일 형식이 아닙니다</p>
+
+<span class="status" :class="ok ? 'ok' : 'fail'"><IconCheck v-if="ok" aria-hidden="true" /><IconX v-else aria-hidden="true" /> {{ ok ? '정상' : '실패' }}</span>
+
+<p class="text-muted">보조 설명</p>   <!-- --text-muted: #6b7280 (4.6:1) 처럼 토큰에서 보장 -->
+
+// 토큰 검사 (테스트에서): import { hex } from 'wcag-contrast'; expect(hex('#6b7280', '#ffffff')).toBeGreaterThan(4.5)
+`,
+        },
+        {
+          id: 'l7', short: `이미지 alt`,
+          title: `내용 이미지는 설명하는 alt, 장식 이미지는 alt=""`,
+          why: `alt 가 없으면 스크린리더가 파일명을 읽고, "이미지" 라고만 쓰면 아무 정보가 없습니다. 상품 사진은 상품명, 그래프는 결론, 장식은 빈 alt 로 건너뛰게 합니다. 링크 안의 이미지는 링크 목적지를 설명합니다.`,
+          bad: String.raw`
+<img :src="product.image">                         <!-- alt 없음: "IMG_2031.jpg" 를 읽는다 -->
+<img :src="product.image" alt="이미지">
+<img src="/divider.png" alt="구분선 장식 이미지">   <!-- 읽을 필요 없는 걸 읽는다 -->
+<a :href="link"><img src="/logo.png"></a>           <!-- 링크 이름이 없다 -->
+`,
+          good: String.raw`
+<NuxtImg :src="product.image" :alt="product.name + ' 상품 사진'" />
+<img src="/divider.png" alt="" role="presentation">
+<a href="/"><img src="/logo.png" alt="파인마켓 홈"></a>
+
+<!-- 차트: 결론을 텍스트로 -->
+<figure>
+  <EChart :option="option" aria-hidden="true" />
+  <figcaption class="sr-only">지난 30일 매출 추이. 총 1,250만원, 전월 대비 12% 증가</figcaption>
+</figure>
+<!-- 사용자 업로드 이미지: alt 입력란을 두거나 "사용자가 올린 이미지" + 캡션 -->
+`,
+        },
+        {
+          id: 'l8', short: `동적 알림`,
+          title: `토스트·로딩·결과 수 같은 동적 변화는 aria-live 로 읽히게 한다`,
+          why: `화면 구석에 토스트가 떠도 스크린리더는 모릅니다. aria-live 영역에 텍스트를 넣으면 포커스를 옮기지 않고도 읽어 줍니다. 영역은 미리 DOM 에 있어야 하고(동적으로 만들면 첫 알림을 놓침), 긴급도에 따라 polite/assertive 를 고릅니다.`,
+          bad: String.raw`
+<Toast v-if="msg">{{ msg }}</Toast>      <!-- v-if 로 생겼다 사라지는 영역: 안 읽힐 수 있다 -->
+<p v-if="loading">불러오는 중</p>
+`,
+          good: String.raw`
+<!-- app.vue: 항상 DOM 에 있는 알림 영역 -->
+<div id="announcer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+<div id="announcer-urgent" class="sr-only" aria-live="assertive" aria-atomic="true"></div>
+
+// utils/announce.ts
+export function announce(text: string, urgent = false) {
+  const el = document.getElementById(urgent ? 'announcer-urgent' : 'announcer'); if (!el) return
+  el.textContent = ''; setTimeout(() => (el.textContent = text), 50)    // 같은 문장 반복도 읽히게 비웠다 넣는다
+}
+// 토스트 스토어 push 에서 announce(message, type === 'error')
+
+<!-- 결과 수·로딩은 영역 자체에 -->
+<p role="status" aria-live="polite">{{ loading ? '불러오는 중' : total + '건' }}</p>
+<button :aria-busy="saving">{{ saving ? '저장 중…' : '저장' }}</button>
+`,
+        },
+        {
+          id: 'l9', short: `폼 오류 연결`,
+          title: `오류 메시지는 입력과 aria-describedby 로 묶고, 제출 실패 시 첫 오류로 포커스`,
+          why: `오류 문구가 입력 아래에 보여도 스크린리더는 입력에 포커스했을 때 그 문구를 모릅니다. describedby 로 묶으면 입력을 읽을 때 같이 읽힙니다. 제출 후 오류가 있으면 첫 오류 입력으로 포커스를 보내야 위에서부터 다시 찾지 않습니다.`,
+          bad: String.raw`
+<input v-model="email">
+<p v-if="errors.email" class="error">{{ errors.email }}</p>
+<button @click="submit">가입</button>    <!-- 실패해도 포커스는 버튼에 -->
+`,
+          good: String.raw`
+<input :id="id" v-model="email" :aria-invalid="!!errors.email" :aria-describedby="errors.email ? id + '-err' : id + '-help'" aria-required="true">
+<p :id="id + '-help'" class="help">회사 이메일을 권장합니다</p>
+<p v-if="errors.email" :id="id + '-err'" class="error" role="alert">{{ errors.email }}</p>
+
+<script setup lang="ts">
+const onSubmit = handleSubmit(save, ({ errors }) => {
+  const first = Object.keys(errors)[0]
+  document.querySelector<HTMLElement>('[name="' + first + '"], #' + first)?.focus()   // 첫 오류로
+  announce('입력 오류가 ' + Object.keys(errors).length + '건 있습니다', true)
+})
+</script>
+<!-- 폼 상단 요약도 좋다: <ul role="alert"><li v-for="(m, k) in errors"><a :href="'#' + k">{{ m }}</a></li></ul> -->
+`,
+        },
+        {
+          id: 'l10', short: `모션과 자동 검사`,
+          title: `prefers-reduced-motion 을 존중하고, axe 를 CI 에 넣는다`,
+          why: `큰 움직임은 전정기관 장애가 있는 사용자에게 어지럼을 줍니다. 미디어 쿼리 하나로 애니메이션을 줄일 수 있습니다. 그리고 라벨 누락·대비·중복 id 같은 기계적 위반은 사람이 매번 못 보니 axe 로 자동 검사합니다(실무 코드 20회차 08번).`,
+          bad: String.raw`
+.page-enter-active { transition: transform .6s cubic-bezier(.2,.8,.2,1) }   /* 모두에게 큰 슬라이드 */
+// 접근성 점검: "출시 전에 한 번 보자" → 보지 않는다
+`,
+          good: String.raw`
+/* 전역 한 줄: 움직임 줄이기 설정이면 전부 짧게 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+}
+// JS 애니메이션(GSAP, motion) 도: const reduce = usePreferredReducedMotion() (VueUse) → reduce.value === 'reduce' 면 건너뛴다
+
+// e2e/a11y.spec.ts: 주요 페이지 6개에 AxeBuilder, critical·serious 위반이면 실패
+// ESLint: eslint-plugin-vuejs-accessibility — alt 누락, label 누락, click 에 keydown 없음 등을 편집기에서
+// 수동 점검 루틴 (분기 1회): 마우스 없이 Tab 만으로 주요 흐름 완주, VoiceOver/NVDA 로 한 바퀴
+`,
+        },
+      ],
+    },
+    {
+      id: 'vue-23', no: 23, name: `성능 측정과 Core Web Vitals`,
+      lead: `LCP·CLS·INP 세 지표를 좋게 유지하는 습관입니다. 이미지와 폰트, 레이아웃 예약, 긴 작업 쪼개기, 서드파티, 하이드레이션 비용, 번들, 캐시, 그리고 "실제 사용자" 측정까지.`,
+      lessons: [
+        {
+          id: 'l1', short: `LCP 이미지`,
+          title: `첫 화면의 큰 이미지는 lazy 를 빼고 우선순위를 올린다`,
+          why: `LCP(가장 큰 콘텐츠가 그려지는 시점) 는 대부분 히어로 이미지입니다. 모든 이미지에 loading="lazy" 를 붙이면 그 이미지도 늦게 시작합니다. 첫 화면의 LCP 후보에는 fetchpriority="high" 와 preload 를, 나머지에만 lazy 를.`,
+          bad: String.raw`
+<NuxtImg v-for="b in banners" :src="b.src" loading="lazy" />   <!-- 첫 배너까지 lazy -->
+<img :src="hero" loading="lazy">
+`,
+          good: String.raw`
+<!-- 첫 화면 LCP 후보: lazy 금지, 우선순위 높임, 미리 로드 -->
+<NuxtImg :src="hero" width="1200" height="600" sizes="100vw sm:100vw md:1200px" preload fetchpriority="high" />
+
+<!-- 그 아래부터만 lazy -->
+<NuxtImg v-for="(b, i) in banners" :key="b.id" :src="b.src" :loading="i === 0 ? 'eager' : 'lazy'" :fetchpriority="i === 0 ? 'high' : 'auto'" />
+
+<!-- 배경 이미지로 LCP 가 되는 경우는 preload 링크를 직접 -->
+useHead({ link: [{ rel: 'preload', as: 'image', href: '/hero.webp', fetchpriority: 'high' }] })
+`,
+          note: `무엇이 LCP 요소인지는 DevTools Performance 패널의 LCP 마커나 web-vitals 의 <code>attribution.element</code> 로 확인합니다. 짐작하지 말고 확인합니다.`,
+        },
+        {
+          id: 'l2', short: `반응형 이미지`,
+          title: `sizes 와 포맷을 지정해 화면에 맞는 크기만 받는다`,
+          why: `원본 3000px 이미지를 모바일 360px 화면에 내려보내면 LCP 가 늦고 데이터가 낭비됩니다. NuxtImg 가 srcset 을 만들어 주지만 sizes 가 없으면 브라우저가 큰 걸 고릅니다. 포맷은 webp/avif 로 자동 변환합니다.`,
+          bad: String.raw`
+<img :src="product.image">                    <!-- 원본 그대로 -->
+<NuxtImg :src="product.image" />              <!-- sizes 없음: 100vw 로 가정 -->
+`,
+          good: String.raw`
+<NuxtImg
+  :src="product.image" :alt="product.name"
+  width="400" height="400"                       <!-- 비율 예약 (03번 CLS) -->
+  sizes="(max-width: 640px) 50vw, 300px"         <!-- 실제 렌더 폭 -->
+  format="webp" quality="80"
+  loading="lazy" placeholder
+/>
+<!-- nuxt.config: image: { provider: 'ipx' | 'cloudinary' | 'vercel', screens: {...}, domains: ['cdn.example.com'] } -->
+<!-- 결과: srcset="…-200.webp 200w, …-400.webp 400w, …-600.webp 600w" 에서 화면 폭·DPR 에 맞는 것 하나만 받는다 -->
+`,
+        },
+        {
+          id: 'l3', short: `레이아웃 예약`,
+          title: `이미지·광고·동적 영역은 크기를 미리 잡아 밀림(CLS)을 막는다`,
+          why: `이미지가 로드되며 아래 내용이 내려가고, 배너가 늦게 끼어들어 버튼이 밀리면 사용자가 잘못 누릅니다. width/height 또는 aspect-ratio 로 자리를 예약하고, 동적 영역은 최소 높이를 둡니다. 스켈레톤도 실제 높이와 같아야 합니다.`,
+          bad: String.raw`
+<img :src="src">                              <!-- 로드 후 높이가 생긴다 -->
+<div v-if="banner"><Banner /></div>           <!-- 늦게 나타나 아래를 민다 -->
+<div v-if="loading">로딩…</div><List v-else /> <!-- 한 줄 → 20줄로 점프 -->
+`,
+          good: String.raw`
+<img :src="src" width="800" height="450">                  <!-- 브라우저가 비율로 자리를 잡는다 -->
+<div class="banner-slot"><Banner v-if="banner" /></div>    <!-- .banner-slot { min-height: 120px } -->
+<ListSkeleton v-if="loading" :rows="10" />                  <!-- 실제 행 높이와 같은 스켈레톤 -->
+<List v-else />
+
+<style>
+.thumb { aspect-ratio: 1 / 1; width: 100% }               /* CSS 로 예약해도 된다 */
+.ad { min-height: 250px; contain: layout }                 /* 서드파티 광고는 고정 높이 */
+</style>
+<!-- 폰트 교체로 글자 폭이 바뀌며 생기는 CLS 는 04번 -->
+`,
+        },
+        {
+          id: 'l4', short: `폰트`,
+          title: `웹폰트는 preload + display: swap, 폴백 폰트 크기를 맞춘다`,
+          why: `폰트가 늦으면 글자가 안 보이거나(FOIT) 바뀌며 레이아웃이 튑니다(CLS). preload 로 빨리 받고 swap 으로 먼저 보여 주되, size-adjust 로 폴백과 폭을 맞추면 교체 시 밀림이 거의 없습니다. 구글 폰트 링크는 요청 체인이 깁니다.`,
+          bad: String.raw`
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700" rel="stylesheet">
+<!-- CSS 받고 → 폰트 URL 알고 → 폰트 받음: 3단계. 그동안 글자가 안 보인다 -->
+`,
+          good: String.raw`
+// nuxt.config.ts — @nuxt/fonts 가 로컬로 받아 self-host + preload + fallback 조정까지
+export default defineNuxtConfig({ modules: ['@nuxt/fonts'], fonts: { families: [{ name: 'Pretendard', provider: 'local', weights: [400, 700] }] } })
+
+/* 직접 할 때 */
+@font-face { font-family: 'Pretendard'; src: url('/fonts/Pretendard-Regular.woff2') format('woff2'); font-weight: 400; font-display: swap; unicode-range: U+AC00-D7A3, U+0020-007E; }
+@font-face { font-family: 'Pretendard Fallback'; src: local('Apple SD Gothic Neo'), local('Malgun Gothic'); size-adjust: 102%; ascent-override: 92%; }   /* 폭 맞춘 폴백 */
+body { font-family: 'Pretendard', 'Pretendard Fallback', sans-serif; }
+
+useHead({ link: [{ rel: 'preload', as: 'font', type: 'font/woff2', href: '/fonts/Pretendard-Regular.woff2', crossorigin: 'anonymous' }] })
+// 한글 폰트는 2~3MB: 서브셋(unicode-range 분할, 자주 쓰는 2,350자) 으로 300KB 이하로
+`,
+        },
+        {
+          id: 'l5', short: `긴 작업 쪼개기`,
+          title: `50ms 넘는 JS 작업은 입력 반응(INP)을 막는다. 나눠서 양보한다`,
+          why: `클릭 뒤 200ms 안에 화면이 반응해야 합니다. 큰 배열 가공, 큰 목록 렌더, 무거운 computed 가 메인 스레드를 잡고 있으면 그 사이 입력은 멈춥니다. 작업을 쪼개 브라우저에 양보하거나, 워커로 보내거나, 렌더를 지연합니다.`,
+          bad: String.raw`
+function onSearch(q: string) {
+  results.value = ALL_ITEMS.filter(...).map(heavyTransform).sort(...)   // 50,000개 × 동기: 300ms 동안 멈춤
+}
+<input @input="onSearch($event.target.value)">
+`,
+          good: String.raw`
+// 1) 입력 디바운스 + 결과는 다음 프레임에
+const onSearch = useDebounceFn((q: string) => { startTransition(() => compute(q)) }, 150)
+
+// 2) 큰 작업은 조각내어 양보 (scheduler.yield 또는 setTimeout 0)
+async function compute(q: string) {
+  const out: Item[] = []
+  for (let i = 0; i < ALL_ITEMS.length; i += 2000) {
+    out.push(...ALL_ITEMS.slice(i, i + 2000).filter(match(q)))
+    await yieldToMain()                                  // const yieldToMain = () => 'scheduler' in window ? scheduler.yield() : new Promise(r => setTimeout(r))
+  }
+  results.value = out
+}
+
+// 3) 정말 무거우면 워커 (실무 코드 10회차 08번): const worker = new Worker(new URL('./search.worker.ts', import.meta.url))
+// 4) 렌더 비용이 문제면: 가상 스크롤(26회차), v-memo, shallowRef 로 반응성 비용 제거
+`,
+        },
+        {
+          id: 'l6', short: `서드파티`,
+          title: `분석·채팅·광고 스크립트는 상호작용 뒤나 유휴 시간에 로드한다`,
+          why: `GTM, 채팅 위젯, 광고 하나가 메인 스레드 500ms 를 먹는 일이 흔합니다. 첫 화면에 필요 없는 스크립트는 사용자가 움직이거나 브라우저가 한가할 때 로드합니다. @nuxt/scripts 가 이런 전략을 제공합니다.`,
+          bad: String.raw`
+useHead({ script: [
+  { src: 'https://www.googletagmanager.com/gtm.js?id=GTM-XXXX' },
+  { src: 'https://widget.channel.io/sdk.js' },
+  { src: 'https://pagead2.googlesyndication.com/...' }
+] })   // 전부 head 에서 즉시
+`,
+          good: String.raw`
+// nuxt.config.ts: modules: ['@nuxt/scripts']
+// 분석: 유휴 시간에
+useScriptGoogleTagManager({ id: 'GTM-XXXX', scriptOptions: { trigger: 'onNuxtReady' } })
+
+// 채팅 위젯: 사용자가 스크롤·클릭하거나 10초 지나면
+const { onLoaded } = useScript('https://widget.channel.io/sdk.js', { trigger: useScriptTriggerInteraction({ timeout: 10_000 }) })
+
+// 지도·결제 SDK: 그 컴포넌트가 보일 때 (실무 코드 17회차 01번 loadScript)
+// 유튜브·소셜 임베드: 썸네일(정적 이미지) 먼저, 클릭 시 iframe — <ScriptYouTubePlayer> 가 이 패턴
+// 측정: DevTools Performance 의 "Third-party" 체크박스로 누가 먹는지 본다
+`,
+        },
+        {
+          id: 'l7', short: `하이드레이션 비용`,
+          title: `보이지 않거나 상호작용 없는 부분은 늦게 또는 아예 하이드레이션하지 않는다`,
+          why: `SSR HTML 이 빨리 와도 JS 가 전체 컴포넌트 트리를 다시 만들어야 클릭이 됩니다(TTI·INP). 화면 밖 섹션은 보일 때, 정적인 섹션은 아예 서버 컴포넌트로 두면 첫 화면 JS 가 크게 줍니다.`,
+          bad: String.raw`
+<template>
+  <Hero /><ProductGrid /><Reviews :items="reviews" /><Footer />
+  <!-- 전부 즉시 하이드레이션. 리뷰 200개 컴포넌트가 화면 밖에서 JS 를 먹는다 -->
+</template>
+`,
+          good: String.raw`
+<template>
+  <Hero />
+  <ProductGrid />
+  <LazyReviews hydrate-on-visible :items="reviews" />              <!-- 3.5 지연 하이드레이션: 보일 때 -->
+  <LazyNewsletter hydrate-on-idle />                                <!-- 브라우저 유휴 시 -->
+  <LazyChatButton hydrate-on-interaction="click" />                 <!-- 누를 때 -->
+  <Footer />                                                        <!-- 상호작용 없는 정적 부분: Footer.server.vue 로 만들면 JS 0 -->
+</template>
+<!-- 서버 컴포넌트 (Nuxt islands): nuxt.config experimental.componentIslands = true, 파일명 *.server.vue. 안에서 ref/onMounted 는 못 쓴다 -->
+<!-- 확인: nuxi analyze 로 클라이언트 번들, DevTools Performance 의 hydrate 구간 길이 -->
+`,
+        },
+        {
+          id: 'l8', short: `번들`,
+          title: `무거운 라이브러리는 쓰는 페이지에서만, 쓰는 부분만 가져온다`,
+          why: `날짜 라이브러리 전체, 차트 전체, 아이콘 세트 전체를 app 번들에 넣으면 모든 페이지가 느려집니다. 동적 import 로 라우트별 청크에 두고, 트리셰이킹되는 모듈별 import 를 씁니다. 번들 분석을 정기적으로 봅니다.`,
+          bad: String.raw`
+import * as echarts from 'echarts'                   // 1MB
+import moment from 'moment'                          // 로케일 전부
+import { Icon } from '@iconify/vue'                  // 런타임 아이콘 로드는 괜찮지만 아이콘 세트 전체 import 는 아니다
+import _ from 'lodash'
+`,
+          good: String.raw`
+import * as echarts from 'echarts/core'; import { LineChart } from 'echarts/charts'   // 부품만 (실무 코드 13회차 01번)
+import { format } from 'date-fns'                   // 함수별
+import debounce from 'lodash-es/debounce'           // ESM 개별
+
+// 무거운 컴포넌트는 쓰는 곳에서 비동기로
+const Editor = defineAsyncComponent(() => import('~/components/editor/RichEditor.vue'))
+
+# 정기 점검
+npx nuxi analyze            # 클라이언트 번들 트리맵: 큰 덩어리가 무엇인지
+# nuxt.config: vite.build.rollupOptions.output.manualChunks 는 보통 불필요. Nuxt 가 라우트별로 나눈다
+# 목표: 첫 페이지 JS gz 150~200KB 이하. 넘으면 07·08번부터
+`,
+        },
+        {
+          id: 'l9', short: `캐시와 SWR`,
+          title: `자주 안 바뀌는 페이지는 routeRules 로 캐시하고, 정적 자산은 1년 캐시`,
+          why: `SSR 은 요청마다 렌더링합니다. 상품 상세처럼 자주 안 바뀌는 페이지는 swr 로 캐시해 두면 TTFB 가 수백 ms 에서 수 ms 로 줍니다. _nuxt 의 해시 파일은 immutable 로 두면 재방문이 빠릅니다. 개인화된 페이지는 캐시하면 안 됩니다.`,
+          bad: String.raw`
+// routeRules 없음: 상품 상세 1만 뷰 = SSR 1만 번 + DB 쿼리 1만 번
+// 정적 자산에 Cache-Control 없음: 재방문도 전부 다시 받는다
+`,
+          good: String.raw`
+// nuxt.config.ts
+routeRules: {
+  '/': { swr: 60 },                                   // 60초 캐시, 그 뒤 백그라운드 재생성
+  '/products/**': { swr: 600 },
+  '/blog/**': { isr: 3600 },                          // Vercel/Netlify 류에서 플랫폼 캐시
+  '/about': { prerender: true },
+  '/me/**': { ssr: false },                           // 개인 페이지: 캐시 없음 + 클라이언트 렌더
+  '/_nuxt/**': { headers: { 'cache-control': 'public, max-age=31536000, immutable' } },
+  '/api/products/**': { cache: { maxAge: 60 } }
+}
+// 주의: swr 페이지에 로그인 사용자 이름을 SSR 로 박으면 다른 사람에게 보인다 → 그 부분은 <ClientOnly> 또는 클라이언트 fetch
+`,
+        },
+        {
+          id: 'l10', short: `실제 사용자 측정`,
+          title: `Lighthouse 점수가 아니라 실제 사용자의 p75 를 보고 고친다`,
+          why: `Lighthouse 는 한 환경의 한 번 측정입니다. 실제 사용자는 느린 폰과 3G 에 있습니다. web-vitals 로 LCP·CLS·INP 와 "어느 요소 때문인지" 를 수집해 페이지별 p75 를 보면 무엇을 먼저 고칠지 정해집니다.`,
+          bad: String.raw`
+// 출시 전 Lighthouse 95점 확인 → 끝
+// 사용자 불만: "모바일에서 버튼이 안 눌려요" (INP 800ms) 를 아무도 못 본다
+`,
+          good: String.raw`
+// plugins/vitals.client.ts
+import { onLCP, onCLS, onINP } from 'web-vitals/attribution'
+export default defineNuxtPlugin(() => {
+  const send = (m: any) => navigator.sendBeacon('/api/vitals', JSON.stringify({
+    name: m.name, value: m.value, rating: m.rating, path: location.pathname,
+    element: m.attribution?.element ?? m.attribution?.largestShiftTarget ?? m.attribution?.interactionTarget,   // 범인 요소
+    connection: (navigator as any).connection?.effectiveType, device: /Mobi/.test(navigator.userAgent) ? 'mobile' : 'desktop'
+  }))
+  onLCP(send); onCLS(send); onINP(send)
+})
+// 서버: 적재 → 페이지·기기별 p75 대시보드 (실무 코드 13회차). 목표 p75: LCP < 2.5s, INP < 200ms, CLS < 0.1
+// Search Console 의 Core Web Vitals 리포트와 CrUX 도 같은 데이터 (28일 롤링)
+// 회귀 방지: Lighthouse CI (lhci) 를 PR 에 — 점수가 아니라 "LCP 가 300ms 이상 나빠지면 실패" 식의 예산으로
+`,
+        },
+      ],
+    },
+    {
+      id: 'vue-24', no: 24, name: `실시간 (WebSocket, SSE)`,
+      lead: `서버가 밀어 주는 데이터를 다루는 습관입니다. 무엇을 쓸지 고르고, 끊김과 재연결을 전제로 설계하고, 연결은 하나만 두고, 메시지는 타입으로 판별하고, 재연결 뒤 상태를 맞추는 것까지.`,
+      lessons: [
+        {
+          id: 'l1', short: `선택`,
+          title: `서버 → 클라이언트 한 방향이면 SSE, 양방향·고빈도면 WebSocket`,
+          why: `알림·진행률·가격 갱신은 서버가 보내기만 합니다. SSE 는 HTTP 라 프록시·인증·재연결이 공짜이고 구현이 짧습니다. 채팅·게임·협업처럼 클라이언트도 자주 보내면 WebSocket. 폴링은 10초 이상 간격이면 여전히 괜찮은 선택입니다.`,
+          bad: String.raw`
+// 알림 배지 하나 때문에 WebSocket 서버 + 인증 핸드셰이크 + 재연결 로직을 전부 만든다
+// 또는 반대로, 채팅을 1초 폴링으로
+`,
+          good: String.raw`
+// 상황 → 선택
+// 알림, 진행률, 대시보드 갱신, 가격 틱   → SSE (EventSource). 자동 재연결, Last-Event-ID 로 이어 받기
+// 채팅, 커서 공유, 게임, 협업 편집       → WebSocket
+// 10초~1분 간격이면 충분한 것           → 폴링 (useIntervalFn + 탭 보일 때만). 가장 단순하고 캐시·CDN 과 잘 맞는다
+
+// Nitro: server/api/notifications/stream.get.ts 에서 createEventStream(event) 으로 SSE
+// Nitro: server/routes/ws.ts 에서 defineWebSocketHandler (nitro.experimental.websocket = true)
+`,
+        },
+        {
+          id: 'l2', short: `연결은 하나`,
+          title: `컴포넌트마다 연결하지 않는다. 앱에 하나, 구독만 나눈다`,
+          why: `알림 센터, 헤더 배지, 채팅 페이지가 각자 WebSocket 을 열면 탭 하나에 연결 3개, 서버는 사용자 수 × 3 입니다. 연결은 플러그인·전역 컴포저블이 하나 들고, 컴포넌트는 토픽을 구독하고 언마운트 때 해제합니다.`,
+          bad: String.raw`
+// components/NotificationBadge.vue
+onMounted(() => { ws = new WebSocket(url) ... })
+// components/NotificationCenter.vue
+onMounted(() => { ws = new WebSocket(url) ... })     // 같은 사용자에게 연결 2개
+`,
+          good: String.raw`
+// composables/useRealtime.ts — 모듈 전역 싱글턴 (클라이언트 전용)
+let socket: ReconnectingSocket | null = null
+const listeners = new Map<string, Set<(data: any) => void>>()
+
+export function useRealtime() {
+  if (import.meta.client) socket ??= createSocket({ onMessage: (msg) => listeners.get(msg.type)?.forEach((fn) => fn(msg.data)) })
+  function on<T>(type: string, fn: (data: T) => void) {
+    (listeners.get(type) ?? listeners.set(type, new Set()).get(type)!).add(fn)
+    onScopeDispose(() => listeners.get(type)?.delete(fn))             // 컴포넌트가 사라지면 구독도
+  }
+  return { on, send: (type: string, data?: unknown) => socket?.send(JSON.stringify({ type, data })), status: socket?.status }
+}
+// 사용: const rt = useRealtime(); rt.on<Noti>('notification', (n) => list.value.unshift(n))
+// 탭 여러 개면 BroadcastChannel 로 한 탭만 연결하고 나머지에 전달하는 것도 가능 (실무 코드 1회차 09번)
+`,
+        },
+        {
+          id: 'l3', short: `재연결`,
+          title: `끊김은 정상이다. 지수 백오프 + 지터로 다시 붙고, 수동 종료와 구분한다`,
+          why: `모바일은 네트워크가 수시로 바뀌고 서버는 배포로 재시작합니다. 바로 재시도하면 서버가 살아날 때 수만 개가 한꺼번에 붙습니다(썬더링 허드). 1초, 2초, 4초… 최대 30초에 무작위를 섞고, 사용자가 닫은 경우는 재시도하지 않습니다.`,
+          bad: String.raw`
+ws.onclose = () => connect()                          // 즉시, 무한, 수동 close 도 다시 붙는다
+`,
+          good: String.raw`
+function createSocket(url: string) {
+  let ws: WebSocket | null = null, attempt = 0, closedByUser = false
+  const status = ref<'connecting' | 'open' | 'closed'>('connecting')
+
+  function connect() {
+    status.value = 'connecting'
+    ws = new WebSocket(url)
+    ws.onopen = () => { attempt = 0; status.value = 'open'; onOpen() }   // 05번: 재동기화
+    ws.onclose = (e) => {
+      status.value = 'closed'
+      if (closedByUser || e.code === 4001) return                  // 4001: 서버가 "인증 만료, 다시 오지 마" 같은 의도적 종료 코드
+      const delay = Math.min(30_000, 1000 * 2 ** attempt++) * (0.5 + Math.random())   // 백오프 + 지터
+      setTimeout(connect, delay)
+    }
+    ws.onerror = () => ws?.close()                                 // error 뒤엔 close 가 온다. 여기서 재시도하지 않는다
+  }
+  function close() { closedByUser = true; ws?.close(1000) }
+  if (navigator.onLine) connect()
+  window.addEventListener('online', () => status.value === 'closed' && !closedByUser && (attempt = 0, connect()))   // 네트워크 복구 즉시
+  return { status, close, send: (s: string) => ws?.readyState === 1 && ws.send(s) }
+}
+`,
+        },
+        {
+          id: 'l4', short: `하트비트`,
+          title: `죽은 연결을 알아채려면 ping/pong 이 필요하다`,
+          why: `와이파이가 끊겨도 TCP 는 몇 분 동안 "열림" 으로 보입니다. 그동안 메시지는 사라지고 onclose 는 안 옵니다. 30초마다 ping 을 보내고 pong 이 안 오면 끊고 재연결합니다. 서버도 같은 이유로 idle 연결을 정리합니다.`,
+          bad: String.raw`
+// 연결만 하고 영원히 기다린다. 사용자는 "알림이 안 와요", 새로고침하면 된다
+`,
+          good: String.raw`
+let pingTimer: ReturnType<typeof setInterval>, pongTimeout: ReturnType<typeof setTimeout>
+ws.onopen = () => {
+  pingTimer = setInterval(() => {
+    ws.send('{"type":"ping"}')
+    pongTimeout = setTimeout(() => ws.close(4000, 'pong timeout'), 10_000)   // 10초 안에 pong 없으면 끊는다 → onclose → 재연결
+  }, 30_000)
+}
+ws.onmessage = (e) => { const msg = JSON.parse(e.data); if (msg.type === 'pong') return clearTimeout(pongTimeout); dispatch(msg) }
+ws.onclose = () => { clearInterval(pingTimer); clearTimeout(pongTimeout); ... }
+
+// 탭이 숨겨지면 타이머가 느려진다: visibilitychange 로 돌아왔을 때 즉시 ping 한 번
+// SSE 는 서버가 15~30초마다 ": keepalive\n\n" 주석 줄을 보내 프록시 타임아웃을 막는다. 브라우저 재연결은 EventSource 가 한다
+`,
+        },
+        {
+          id: 'l5', short: `재연결 후 동기화`,
+          title: `끊긴 동안 놓친 것은 "다시 받기" 로 메운다. 밀린 메시지를 기대하지 않는다`,
+          why: `30초 끊겼다 붙으면 그 사이 메시지는 없습니다. 실시간 채널은 "변했다는 신호" 이고 진실은 서버 상태입니다. onopen 에서 마지막으로 받은 id 이후를 요청하거나(SSE Last-Event-ID), 간단히 목록을 다시 받습니다.`,
+          bad: String.raw`
+// onopen 에서 아무것도 안 한다. 끊긴 동안 온 채팅 10개는 영원히 안 보인다
+`,
+          good: String.raw`
+let lastId: string | null = null
+function onOpen() {
+  if (lastId) send('resync', { since: lastId })          // 서버: since 이후 이벤트를 순서대로 재전송 (또는 REST 로 GET /messages?after=lastId)
+  else refreshNuxtData('messages')                       // 첫 연결이거나 기준이 없으면 통째로
+}
+function dispatch(msg) { if (msg.id) lastId = msg.id; ... }
+
+// SSE 는 내장: 서버가 각 이벤트에 id: 를 붙이면 브라우저가 재연결 시 Last-Event-ID 헤더를 보낸다
+// server: const stream = createEventStream(event); const since = getHeader(event, 'last-event-id'); for (const e of await eventsAfter(since)) stream.push({ id: e.id, data: JSON.stringify(e) })
+
+// 화면 쪽: 재연결 중임을 알린다 — <p v-if="status !== 'open'" role="status">연결 중…</p>. 보내기 버튼은 비활성이 아니라 큐에 넣고 연결되면 보낸다 (실무 코드 7회차 07번)
+`,
+        },
+        {
+          id: 'l6', short: `메시지 모양`,
+          title: `모든 메시지는 { type, data } 봉투에 담고, 타입별 스키마로 판별한다`,
+          why: `문자열을 보고 if 로 나누면 메시지 종류가 10개가 되면서 무너집니다. 타입 필드를 두고 스키마(zod) 로 검증한 뒤 핸들러 표에 넘깁니다. 모르는 타입은 무시하되 로그로 남겨 서버·클라이언트 버전 차이를 알아챕니다.`,
+          bad: String.raw`
+ws.onmessage = (e) => {
+  if (e.data.startsWith('msg:')) addMessage(e.data.slice(4))
+  else if (e.data.includes('typing')) ...
+}
+`,
+          good: String.raw`
+// shared/realtime.ts — 서버·클라이언트 공용
+import { z } from 'zod'
+export const Envelope = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('message'), id: z.string(), data: z.object({ roomId: z.string(), text: z.string(), authorId: z.string(), at: z.string() }) }),
+  z.object({ type: z.literal('typing'), data: z.object({ roomId: z.string(), userId: z.string() }) }),
+  z.object({ type: z.literal('presence'), data: z.object({ online: z.array(z.string()) }) }),
+  z.object({ type: z.literal('pong') })
+])
+export type Envelope = z.infer<typeof Envelope>
+
+// 클라이언트
+const handlers: { [K in Envelope['type']]?: (m: Extract<Envelope, { type: K }>) => void } = {
+  message: (m) => chat.add(m.data), typing: (m) => chat.typing(m.data.userId), presence: (m) => chat.setOnline(m.data.online)
+}
+ws.onmessage = (e) => {
+  const r = Envelope.safeParse(JSON.parse(e.data))
+  if (!r.success) return console.warn('[ws] unknown message', e.data.slice(0, 100))
+  handlers[r.data.type]?.(r.data as any)
+}
+`,
+        },
+        {
+          id: 'l7', short: `렌더 묶기`,
+          title: `초당 수십 개 메시지는 받는 즉시 그리지 않고 프레임 단위로 묶는다`,
+          why: `가격 틱 50개/초를 하나하나 ref 에 넣으면 초당 50번 리렌더됩니다. 버퍼에 모았다가 requestAnimationFrame 한 번에 반영하면 화면은 같고 비용은 1/3 입니다. 대량 목록은 shallowRef 로 반응성 비용도 줄입니다.`,
+          bad: String.raw`
+rt.on('tick', (t) => { prices.value[t.symbol] = t.price })   // 틱마다 반응성 트리거, 틱마다 렌더
+`,
+          good: String.raw`
+const prices = shallowRef<Record<string, number>>({})
+const buffer: Tick[] = []
+let scheduled = false
+rt.on<Tick>('tick', (t) => {
+  buffer.push(t)
+  if (scheduled) return
+  scheduled = true
+  requestAnimationFrame(() => {
+    const next = { ...prices.value }
+    for (const b of buffer) next[b.symbol] = b.price                  // 같은 심볼은 마지막 값만 남는다
+    buffer.length = 0; scheduled = false
+    prices.value = next                                               // 한 번만 트리거
+  })
+})
+// 탭이 숨겨져 있으면 rAF 가 멈춘다 → 버퍼가 무한히 쌓이지 않게 상한(예: 1,000) 을 두고 오래된 것부터 버리거나, 숨김 중엔 구독 해제 (10번)
+`,
+        },
+        {
+          id: 'l8', short: `인증`,
+          title: `WebSocket 은 헤더를 못 보낸다. 쿠키나 1회용 티켓으로 인증한다`,
+          why: `브라우저 WebSocket API 에는 Authorization 헤더가 없습니다. URL 쿼리에 액세스 토큰을 넣으면 로그와 히스토리에 남습니다. 같은 도메인이면 쿠키가 자동으로 가고, 아니면 짧게 사는 티켓을 REST 로 받아 첫 메시지로 보냅니다.`,
+          bad: String.raw`
+new WebSocket('wss://api.example.com/ws?token=' + accessToken)    // 서버 로그, 프록시 로그에 토큰이 남는다
+`,
+          good: String.raw`
+// 같은 도메인 (또는 서브도메인 쿠키): 쿠키가 핸드셰이크에 자동으로 실린다. 서버는 upgrade 핸들러에서 쿠키로 사용자 확인
+// Nitro: defineWebSocketHandler({ upgrade(req) { const user = await userFromCookie(req.headers.cookie); if (!user) throw createError({ statusCode: 401 }) }, open(peer) { ... } })
+
+// 다른 도메인: 1회용 티켓
+const { ticket } = await $api<{ ticket: string }>('/api/ws/ticket', { method: 'POST' })   // 30초 유효, 1회
+const ws = new WebSocket('wss://rt.example.com/ws')
+ws.onopen = () => ws.send(JSON.stringify({ type: 'auth', data: { ticket } }))             // 첫 메시지로 인증. 서버는 5초 안에 auth 없으면 끊는다
+// 토큰 만료: 서버가 close(4001) → 클라이언트는 재발급(1회차) 후 새 티켓으로 재연결. 03번에서 4001 은 자동 재시도 제외
+`,
+        },
+        {
+          id: 'l9', short: `서버 쪽 방`,
+          title: `브로드캐스트는 방(room) 단위로, 사용자 ↔ 연결은 다대다로 관리한다`,
+          why: `모든 연결에 모든 메시지를 보내면 사용자 수의 제곱으로 늘어납니다. 채팅방·주문·문서 단위의 방에 연결을 넣고 그 방에만 보냅니다. 한 사용자가 탭 3개면 연결 3개이므로 "사용자에게 보내기" 는 그 사용자의 연결 전부입니다. 서버가 여러 대면 Redis pub/sub 로 잇습니다.`,
+          bad: String.raw`
+const peers = new Set<Peer>()
+open(peer) { peers.add(peer) }
+message(peer, msg) { for (const p of peers) p.send(msg) }   // 전부에게
+`,
+          good: String.raw`
+// server/routes/ws.ts (Nitro, crossws)
+export default defineWebSocketHandler({
+  async upgrade(req) { req.context.user = await userFromCookie(req.headers.get('cookie')) },
+  open(peer) { peer.subscribe('user:' + peer.context.user.id) },             // 사용자 채널: 알림용
+  message(peer, raw) {
+    const msg = Envelope.parse(JSON.parse(raw.text()))
+    if (msg.type === 'join') { if (await canJoin(peer.context.user, msg.data.roomId)) peer.subscribe('room:' + msg.data.roomId) }   // 권한 검사 후 방 구독
+    if (msg.type === 'message') { const saved = await saveMessage(msg.data, peer.context.user); peer.publish('room:' + msg.data.roomId, JSON.stringify({ type: 'message', ...saved })); peer.send(JSON.stringify({ type: 'ack', id: msg.data.clientId, serverId: saved.id })) }
+  },
+  close(peer) { /* 구독은 자동 해제. presence 갱신 */ }
+})
+// 다른 곳(결제 승인 핸들러) 에서 특정 사용자에게: 실무 코드 15회차 publishSSE 처럼 pub/sub 어댑터로 → nitro.websocket.adapter 'redis' 면 여러 인스턴스에 전파
+`,
+        },
+        {
+          id: 'l10', short: `탭과 배터리`,
+          title: `탭이 숨겨지면 구독을 줄이거나 끊고, 돌아오면 다시 맞춘다`,
+          why: `백그라운드 탭 20개가 각자 실시간 연결을 유지하면 서버와 배터리가 낭비됩니다. 숨겨진 동안은 저빈도 토픽(가격 틱) 구독을 해제하거나 아예 끊고, 돌아오면 05번처럼 재동기화합니다. 알림처럼 꼭 받아야 하는 건 SSE 하나만 남깁니다.`,
+          bad: String.raw`
+// 탭 상태와 무관하게 틱 50개/초를 계속 받고 버퍼에 쌓는다
+`,
+          good: String.raw`
+const visible = useDocumentVisibility()
+watch(visible, (v) => {
+  if (v === 'hidden') { rt.send('unsubscribe', { topic: 'ticks' }); hiddenAt = Date.now() }
+  else {
+    rt.send('subscribe', { topic: 'ticks' })
+    if (Date.now() - hiddenAt > 60_000) refreshNuxtData('prices')     // 오래 비웠으면 통째로 다시
+  }
+})
+// 더 공격적으로: 숨겨진 지 5분이 지나면 socket.close(), 돌아오면 connect() (03번 closedByUser 플래그를 써서 자동 재시도와 구분)
+// 서버도 방어: 같은 사용자 연결 상한(예: 5), idle 10분이면 끊기
+`,
+        },
+      ],
+    },
+    {
+      id: 'vue-25', no: 25, name: `파일 업로드와 이미지 처리`,
+      lead: `파일을 안전하고 빠르게 받는 습관입니다. 검증은 양쪽에서, 큰 파일은 서버를 거치지 않고, 이미지는 올리기 전에 줄이고, 진행률과 취소를 주고, 저장 뒤에는 최적화해서 보여 줍니다.`,
+      lessons: [
+        {
+          id: 'l1', short: `타입 검증`,
+          title: `accept 는 편의이고, 검증은 서버가 파일 내용으로 한다`,
+          why: `accept="image/*" 는 파일 선택창의 필터일 뿐이고, file.type 은 확장자로 추측한 값이라 조작됩니다. 서버가 매직 바이트로 실제 형식을 확인하고 허용 목록과 대조해야 .jpg 로 위장한 HTML·스크립트를 막습니다.`,
+          bad: String.raw`
+<input type="file" accept="image/*" @change="upload">
+// server: if (!file.type.startsWith('image/')) throw ...   // 클라이언트가 보낸 Content-Type 을 믿는다
+`,
+          good: String.raw`
+<!-- 클라이언트: 빠른 피드백용 -->
+<input type="file" accept="image/jpeg,image/png,image/webp" @change="onPick">
+<script setup lang="ts">
+const ALLOWED = ['image/jpeg', 'image/png', 'image/webp']
+function onPick(e: Event) {
+  const file = (e.target as HTMLInputElement).files?.[0]; if (!file) return
+  if (!ALLOWED.includes(file.type)) return toast.error('JPG, PNG, WebP 만 올릴 수 있습니다')
+  upload(file)
+}
+</script>
+
+// 서버: 내용으로 판별
+import { fileTypeFromBuffer } from 'file-type'
+const detected = await fileTypeFromBuffer(buffer)                           // 매직 바이트
+if (!detected || !ALLOWED.includes(detected.mime)) throw createError({ statusCode: 415, statusMessage: '지원하지 않는 파일 형식입니다' })
+// 저장할 확장자도 detected.ext 로 정한다. 사용자가 준 파일명의 확장자는 쓰지 않는다 (10번)
+// SVG 는 스크립트를 품을 수 있다: 이미지로 허용하려면 sanitize(DOMPurify) 하거나 raster 로 변환
+`,
+        },
+        {
+          id: 'l2', short: `크기 제한`,
+          title: `크기 제한은 선택 직후, 서버 핸들러, 프록시 세 곳에 둔다`,
+          why: `100MB 를 다 올린 뒤에 "10MB 이하만" 이라고 하면 사용자는 화가 납니다. 선택 즉시 막고, 서버도 본문을 다 읽기 전에 Content-Length 로 거르고, 프록시(nginx client_max_body_size) 도 막아야 메모리 공격을 받지 않습니다.`,
+          bad: String.raw`
+// 서버에서 전부 읽은 뒤
+const body = await readMultipartFormData(event)
+if (body[0].data.length > 10 * 1024 * 1024) throw createError({ statusCode: 413 })   // 이미 메모리에 100MB
+`,
+          good: String.raw`
+// 1) 클라이언트: 선택 즉시
+const MAX = 10 * 1024 * 1024
+if (file.size > MAX) return toast.error('10MB 이하만 올릴 수 있습니다 (' + (file.size / 1048576).toFixed(1) + 'MB)')
+
+// 2) 서버: 읽기 전에 헤더로
+const len = Number(getHeader(event, 'content-length') ?? 0)
+if (len > MAX + 1024) throw createError({ statusCode: 413, statusMessage: '파일이 너무 큽니다' })
+// 그리고 스트리밍으로 받으면서 누적 크기 초과 시 끊기 (busboy / @fastify/multipart limits)
+
+// 3) 프록시
+// nginx: client_max_body_size 12m;   Vercel/Netlify 함수는 4.5~6MB 본문 제한 → 큰 파일은 06번 presigned 직접 업로드
+`,
+        },
+        {
+          id: 'l3', short: `리사이즈`,
+          title: `사진은 올리기 전에 브라우저에서 줄인다`,
+          why: `폰 사진은 4~12MB 인데 화면에는 1600px 이면 충분합니다. 캔버스로 줄이면 업로드가 10배 빨라지고 서버 저장소도 줍니다. 원본이 필요한 경우(인쇄, 증빙) 만 예외입니다. EXIF 회전은 createImageBitmap 이 처리합니다.`,
+          bad: String.raw`
+await upload(file)      // 12MB 원본을 그대로. 3G 에서 2분
+`,
+          good: String.raw`
+export async function resizeImage(file: File, { maxWidth = 1600, quality = 0.85, type = 'image/webp' } = {}): Promise<File> {
+  if (!file.type.startsWith('image/') || file.type === 'image/gif') return file                 // GIF 는 애니메이션이 깨진다
+  const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' })                  // EXIF 회전 반영
+  const scale = Math.min(1, maxWidth / Math.max(bmp.width, bmp.height))
+  if (scale === 1 && file.size < 500 * 1024) { bmp.close(); return file }                      // 이미 작으면 그대로
+  const canvas = new OffscreenCanvas(Math.round(bmp.width * scale), Math.round(bmp.height * scale))
+  canvas.getContext('2d')!.drawImage(bmp, 0, 0, canvas.width, canvas.height); bmp.close()
+  const blob = await canvas.convertToBlob({ type, quality })
+  return new File([blob], file.name.replace(/\.\w+$/, '') + '.webp', { type })
+}
+// 캔버스를 거치면 EXIF(위치 정보 포함) 가 사라진다 — 개인정보 측면에서도 좋다 (09번)
+// 워커에서 돌리면 UI 가 안 멈춘다: OffscreenCanvas 는 워커에서도 된다
+`,
+        },
+        {
+          id: 'l4', short: `진행률과 취소`,
+          title: `1초 넘는 업로드에는 진행률과 취소 버튼이 있다`,
+          why: `fetch 는 업로드 진행률 이벤트가 없습니다. XMLHttpRequest 의 upload.onprogress 를 쓰거나 axios 의 onUploadProgress 를 씁니다. 취소는 AbortController 로, 취소된 업로드는 서버에서도 파일이 남지 않게 합니다.`,
+          bad: String.raw`
+await fetch('/api/upload', { method: 'POST', body: form })   // 진행률 없음, 취소 없음, 사용자는 멈춘 줄 안다
+`,
+          good: String.raw`
+export function uploadWithProgress(url: string, file: File, onProgress: (p: number) => void, signal?: AbortSignal) {
+  return new Promise<any>((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('PUT', url)
+    xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(Math.round((e.loaded / e.total) * 100))
+    xhr.onload = () => (xhr.status < 300 ? resolve(xhr.response) : reject(new Error('upload failed ' + xhr.status)))
+    xhr.onerror = () => reject(new Error('network'))
+    signal?.addEventListener('abort', () => { xhr.abort(); reject(new DOMException('aborted', 'AbortError')) })
+    xhr.send(file)
+  })
+}
+// axios 면: axios.put(url, file, { onUploadProgress: (e) => ..., signal })
+
+<progress :value="progress" max="100" :aria-label="file.name + ' 업로드'" />
+<button @click="controller.abort()">취소</button>
+// 여러 파일은 동시 2~3개로 제한한 큐 (실무 코드 6회차 03번). 전부 동시에 쏘면 느린 회선에서 전부 타임아웃
+`,
+        },
+        {
+          id: 'l5', short: `미리보기`,
+          title: `미리보기는 createObjectURL, 다 쓰면 revoke 한다`,
+          why: `FileReader 로 data URL 을 만들면 파일 크기의 1.3배 문자열이 메모리에 생기고 템플릿에 박힙니다. createObjectURL 은 즉시 끝나고 가볍지만, 해제하지 않으면 탭이 닫힐 때까지 메모리를 잡습니다. 컴포넌트가 사라지거나 파일이 바뀌면 revoke.`,
+          bad: String.raw`
+const reader = new FileReader()
+reader.onload = () => (preview.value = reader.result as string)   // 12MB 사진 → 16MB 문자열
+reader.readAsDataURL(file)
+`,
+          good: String.raw`
+// composables/useObjectUrl.ts (VueUse 의 useObjectUrl 과 같은 것)
+export function useObjectUrl(file: Ref<File | Blob | null>) {
+  const url = ref<string | null>(null)
+  watch(file, (f) => {
+    if (url.value) URL.revokeObjectURL(url.value)
+    url.value = f ? URL.createObjectURL(f) : null
+  }, { immediate: true })
+  onScopeDispose(() => url.value && URL.revokeObjectURL(url.value))
+  return url
+}
+const preview = useObjectUrl(selectedFile)
+<img v-if="preview" :src="preview" alt="선택한 이미지 미리보기">
+// 업로드가 끝나 서버 URL 로 바꾼 뒤에도 revoke 된다 (file 을 null 로)
+`,
+        },
+        {
+          id: 'l6', short: `직접 업로드`,
+          title: `큰 파일은 우리 서버를 거치지 않고 스토리지에 바로 올린다`,
+          why: `서버가 파일을 받아 다시 S3 에 올리면 대역폭·메모리·시간이 두 배이고 서버리스 본문 제한에 걸립니다. 서버는 서명된 URL 만 발급하고 브라우저가 스토리지에 직접 PUT 합니다. 완료 후 서버에 "올렸다" 고 알려 DB 에 기록합니다.`,
+          bad: String.raw`
+// 브라우저 → 우리 서버(multipart 파싱, 메모리) → S3. 100MB 동영상이면 서버가 죽는다
+`,
+          good: String.raw`
+// 1) server/api/uploads/presign.post.ts — 서명만. 키는 서버가 정한다 (10번)
+export default defineEventHandler(async (event) => {
+  const user = await requireUser(event)
+  const { name, type, size } = z.object({ name: z.string(), type: z.enum(ALLOWED), size: z.number().max(MAX) }).parse(await readBody(event))
+  const key = 'u/' + user.id + '/' + randomUUID() + '.' + extFor(type)
+  const url = await getSignedUrl(s3, new PutObjectCommand({ Bucket, Key: key, ContentType: type, ContentLength: size }), { expiresIn: 300 })
+  return { url, key }
+})
+// 2) 브라우저: 04번 uploadWithProgress(url, file, ...)  — Content-Type 헤더를 서명과 같게
+// 3) server/api/uploads/complete.post.ts — HeadObject 로 실제 존재·크기 확인 후 DB 기록. 24시간 안에 complete 가 없는 키는 정리 작업이 삭제
+// 버킷 CORS: AllowedMethods PUT, AllowedOrigins 우리 도메인, ExposeHeaders ETag
+// 100MB 넘으면 멀티파트 업로드(5MB 조각, 병렬, 재개) — @aws-sdk/lib-storage 또는 Uppy 의 AwsS3Multipart
+`,
+        },
+        {
+          id: 'l7', short: `보여 주기`,
+          title: `저장한 원본을 그대로 쓰지 않고, 보여 줄 크기로 변환해서 보여 준다`,
+          why: `업로드된 2000px 이미지를 목록 썸네일 80px 에 그대로 쓰면 목록 하나에 20MB 입니다. 이미지 변환 서비스(ipx, Cloudinary, imgproxy, CloudFront 함수) 를 앞에 두고 NuxtImg 로 크기·포맷을 지정합니다. 원본은 저장소에만.`,
+          bad: String.raw`
+<img v-for="p in products" :src="p.imageUrl" class="thumb">   <!-- 원본 URL 을 썸네일에 -->
+`,
+          good: String.raw`
+// nuxt.config.ts
+image: { provider: 'ipx', domains: ['uploads.example.com'], presets: { thumb: { modifiers: { width: 160, height: 160, fit: 'cover', format: 'webp' } } } }
+// 또는 CDN 변환: provider: 'cloudinary' | 'imgproxy' | 'cloudflare' ...
+
+<NuxtImg v-for="p in products" :key="p.id" :src="p.imageUrl" preset="thumb" :alt="p.name" loading="lazy" />
+<!-- 상세: sizes 로 반응형 (23회차 02번) -->
+
+// 변환 결과는 CDN 캐시. 원본 교체 시 URL 이 같으면 캐시가 남는다 → 파일 키에 UUID 를 쓰고 교체는 새 키로 (10번)
+// 사용자 아바타처럼 작은 고정 크기는 업로드 완료 시점에 서버가 미리 변환해 두는 것도 좋다 (sharp)
+`,
+        },
+        {
+          id: 'l8', short: `드롭과 붙여넣기`,
+          title: `드롭존은 input 을 숨긴 label 위에 얹고, 붙여넣기도 같은 경로로 받는다`,
+          why: `드래그 앤 드롭만 되는 영역은 키보드·스크린리더 사용자가 쓸 수 없습니다. 진짜 input[type=file] 을 label 로 감싸고 드롭·붙여넣기 이벤트는 같은 처리 함수로 보냅니다. dragover 에 preventDefault 가 없으면 브라우저가 파일을 열어 버립니다.`,
+          bad: String.raw`
+<div class="dropzone" @drop="onDrop">여기에 끌어다 놓으세요</div>   <!-- 클릭도 키보드도 안 됨, dragover 미처리 -->
+`,
+          good: String.raw`
+<label class="dropzone" :class="{ over }" @dragover.prevent="over = true" @dragleave="over = false" @drop.prevent="over = false; addFiles($event.dataTransfer?.files)">
+  <input type="file" multiple accept="image/jpeg,image/png,image/webp" class="sr-only" @change="addFiles(($event.target as HTMLInputElement).files); ($event.target as HTMLInputElement).value = ''">
+  <IconUpload aria-hidden="true" />
+  <span>끌어다 놓거나 <u>클릭해서 선택</u></span>
+  <span class="tiny muted">JPG, PNG, WebP · 10MB 이하 · 최대 10장</span>
+</label>
+<script setup lang="ts">
+function addFiles(list?: FileList | null) { for (const f of Array.from(list ?? [])) enqueue(f) }   // 01·02·03번 검증과 리사이즈 → 큐
+useEventListener(document, 'paste', (e) => { const files = Array.from(e.clipboardData?.files ?? []); if (files.length) { e.preventDefault(); addFiles(files as any) } })
+</script>
+<!-- input.value = '' : 같은 파일을 다시 골라도 change 가 나게. 폴더 드롭은 webkitGetAsEntry 로 재귀 -->
+`,
+        },
+        {
+          id: 'l9', short: `개인정보`,
+          title: `사진의 위치 정보(EXIF) 는 지우고, 비공개 파일은 서명 URL 로만 준다`,
+          why: `폰 사진에는 GPS 좌표가 들어 있습니다. 프로필 사진으로 올린 원본을 그대로 공개하면 집 주소가 새어 나갑니다. 03번 캔버스 변환은 EXIF 를 지우지만 원본을 그대로 받는 경로가 있다면 서버에서 지웁니다. 증빙·계약서 같은 파일은 공개 URL 이 아니라 만료되는 서명 URL 로.`,
+          bad: String.raw`
+// 원본 그대로 공개 버킷에 → https://cdn.example.com/u/123/IMG_2031.jpg (GPS 포함, 누구나 접근)
+`,
+          good: String.raw`
+// 서버: sharp 로 메타데이터 제거하며 저장 (rotate() 가 EXIF 방향을 적용한 뒤 버린다)
+const clean = await sharp(buffer).rotate().withMetadata({ exif: {} }).toFormat('webp', { quality: 85 }).toBuffer()
+
+// 비공개 파일: 버킷은 private, 조회는 서명 URL (짧은 만료) 또는 서버 프록시 + 권한 검사
+// server/api/files/[id].get.ts
+export default defineEventHandler(async (event) => {
+  const user = await requireUser(event)
+  const f = await db.file.findUnique({ where: { id: getRouterParam(event, 'id')! } })
+  if (!f || !canRead(user, f)) throw createError({ statusCode: 404 })          // 403 대신 404: 존재 여부도 숨긴다
+  return sendRedirect(event, await getSignedUrl(s3, new GetObjectCommand({ Bucket, Key: f.key }), { expiresIn: 60 }), 302)
+})
+// 삭제 요청(탈퇴) 시 DB 행만 지우지 말고 스토리지 객체도 지운다 → file 테이블에 key 를 두고 작업으로 정리
+`,
+        },
+        {
+          id: 'l10', short: `파일명과 경로`,
+          title: `저장 키는 서버가 만들고, 사용자 파일명은 표시용으로만 따로 저장한다`,
+          why: `사용자 파일명을 경로에 쓰면 ../ 로 다른 폴더에 쓰거나, 한글·공백·특수문자로 URL 이 깨지거나, 같은 이름이 덮어씁니다. 키는 UUID 로 서버가 정하고, 원래 이름은 DB 의 displayName 에 두고 다운로드 때 Content-Disposition 으로 돌려줍니다.`,
+          bad: String.raw`
+const path = 'uploads/' + file.filename                     // "../../.env" , "내 사진 (1).JPG", 덮어쓰기
+fs.writeFileSync(path, data)
+`,
+          good: String.raw`
+const key = 'u/' + user.id + '/' + new Date().toISOString().slice(0, 7) + '/' + randomUUID() + '.' + detected.ext   // u/42/2026-03/5f1c….webp
+await db.file.create({ data: { key, displayName: sanitizeName(file.filename), mime: detected.mime, size: buffer.length, ownerId: user.id } })
+
+function sanitizeName(n: string) { return n.replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').replace(/^\.+/, '').slice(0, 120) || 'file' }
+
+// 다운로드: 원래 이름으로, 한글은 RFC 5987
+setHeader(event, 'content-disposition', "attachment; filename*=UTF-8''" + encodeURIComponent(f.displayName))
+// 실행 가능한 형식(.html .svg .js) 은 attachment 로만 내려보내고, 업로드 도메인은 앱 도메인과 분리 (uploads.example.com) 해 쿠키·스크립트 실행을 격리
+`,
+        },
+      ],
+    },
+    {
+      id: 'vue-26', no: 26, name: `데이터 테이블과 페이지네이션 패턴`,
+      lead: `목록 화면을 흔들리지 않게 만드는 습관입니다. 페이지는 서버가, 정렬은 허용 목록으로, 상태는 URL 에, 선택은 id 로, 로딩 중에는 이전 데이터를 보여 주고, 큰 목록은 가상 스크롤로.`,
+      lessons: [
+        {
+          id: 'l1', short: `서버 페이지네이션`,
+          title: `전부 받아 클라이언트에서 자르지 않는다`,
+          why: `"일단 다 받고 slice" 는 100건까지만 됩니다. 1만 건이면 응답이 수 MB 이고 첫 화면이 몇 초 걸립니다. 서버가 page·perPage 를 받아 그 페이지와 총 개수를 돌려주고, 클라이언트는 받은 것만 그립니다.`,
+          bad: String.raw`
+const { data: all } = await useFetch('/api/orders')           // 전부
+const page = ref(1)
+const rows = computed(() => all.value.slice((page.value - 1) * 20, page.value * 20))
+`,
+          good: String.raw`
+const query = computed(() => ({ page: page.value, perPage: 20, sort: sort.value, dir: dir.value }))
+const { data, status } = await useFetch('/api/orders', { query, watch: [query], default: () => ({ items: [], total: 0 }) })
+// 응답: { items: Order[], total: 1234, page: 3, perPage: 20 }
+
+// 서버
+const page = Math.max(1, Number(q.page) || 1), perPage = Math.min(100, Number(q.perPage) || 20)   // 상한 필수
+const [items, total] = await Promise.all([
+  db.order.findMany({ where, orderBy, skip: (page - 1) * perPage, take: perPage }),
+  db.order.count({ where })
+])
+`,
+          note: `total 을 세는 count 가 느린 큰 테이블이면 "더 있음" 만 알려 주는 방식(take: perPage + 1) 이나 02번 커서를 씁니다.`,
+        },
+        {
+          id: 'l2', short: `커서 vs 오프셋`,
+          title: `페이지 번호 UI 는 오프셋, 무한 스크롤·실시간 목록은 커서`,
+          why: `오프셋은 "3페이지로" 가 되지만 100만 건에서 skip 이 느리고, 새 행이 끼면 다음 페이지에 중복·누락이 생깁니다. 커서(마지막 행의 정렬 키) 는 빠르고 안정적이지만 임의 페이지로 못 갑니다. 화면이 요구하는 것에 맞춥니다.`,
+          bad: String.raw`
+// 무한 스크롤에 오프셋: 스크롤 중 새 주문이 들어오면 같은 행이 두 번 보인다
+useFetch('/api/feed', { query: { page } })
+`,
+          good: String.raw`
+// 커서: 정렬 키 + 고유 키 (createdAt 이 같을 수 있으니 id 를 같이)
+// GET /api/feed?after=2026-03-05T10:00:00Z_abc123&limit=20
+const [createdAt, id] = decodeCursor(q.after)
+const items = await db.post.findMany({
+  where: { OR: [{ createdAt: { lt: createdAt } }, { createdAt, id: { lt: id } }] },
+  orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 21
+})
+const hasMore = items.length > 20
+return { items: items.slice(0, 20), nextCursor: hasMore ? encodeCursor(items[19]) : null }
+
+// 클라이언트: 실무 코드 4회차 02번 무한 스크롤. nextCursor 가 null 이면 끝
+// 관리자 테이블처럼 "총 1,234건, 62페이지" 가 필요하면 오프셋 (01번)
+`,
+        },
+        {
+          id: 'l3', short: `정렬 화이트리스트`,
+          title: `정렬 컬럼과 방향은 허용 목록에서만 받는다`,
+          why: `?sort=password 나 ?sort=users.email 을 그대로 orderBy 에 넣으면 정보가 새거나 오류가 납니다. 정렬 가능한 컬럼 목록을 두고 그 안에서만, 방향은 asc/desc 둘 중 하나로 정규화합니다. 기본 정렬도 명시해야 페이지가 안정적입니다.`,
+          bad: String.raw`
+db.order.findMany({ orderBy: { [q.sort]: q.dir } })     // 아무 컬럼, 아무 값
+`,
+          good: String.raw`
+const SORTABLE = { createdAt: 'createdAt', amount: 'amount', status: 'status', customer: 'customer.name' } as const
+const sortKey = (q.sort in SORTABLE ? q.sort : 'createdAt') as keyof typeof SORTABLE
+const dir = q.dir === 'asc' ? 'asc' : 'desc'
+const orderBy = [toOrderBy(SORTABLE[sortKey], dir), { id: 'desc' }]      // 동률 시 id 로 안정 정렬: 페이지 넘길 때 행이 안 섞인다
+
+// 프론트의 컬럼 정의에서도 같은 목록 (실무 코드 14회차: 필드 정의의 sortable)
+// 복합 정렬 UI 는 드물다. 한 컬럼 + 방향으로 시작
+`,
+        },
+        {
+          id: 'l4', short: `URL 상태`,
+          title: `페이지·정렬·필터·검색은 ref 가 아니라 URL 쿼리에 산다`,
+          why: `3페이지에서 상세로 갔다 돌아오면 1페이지면 사용자는 포기합니다. URL 에 있으면 뒤로가기·새로고침·공유가 전부 됩니다. ref 는 URL 을 읽어 만든 파생값이고, 바꾸면 router.replace 로 URL 을 바꿉니다.`,
+          bad: String.raw`
+const page = ref(1); const sort = ref('createdAt'); const q = ref('')
+// 상세 갔다 오면 전부 초기화
+`,
+          good: String.raw`
+// composables/useListParams.ts
+export function useListParams(defaults: { sort: string; dir: 'asc' | 'desc'; perPage?: number }) {
+  const route = useRoute(); const router = useRouter()
+  const params = computed(() => ({
+    page: Math.max(1, Number(route.query.page) || 1),
+    perPage: Number(route.query.perPage) || defaults.perPage || 20,
+    sort: String(route.query.sort || defaults.sort), dir: route.query.dir === 'asc' ? 'asc' : route.query.dir === 'desc' ? 'desc' : defaults.dir,
+    q: String(route.query.q ?? ''), status: toArray(route.query.status)
+  }))
+  function set(patch: Partial<typeof params.value>) {
+    const next: Record<string, any> = { ...route.query, ...patch }
+    if (!('page' in patch)) delete next.page                         // 조건이 바뀌면 1페이지로
+    for (const k in next) if (next[k] === '' || next[k] == null || (Array.isArray(next[k]) && !next[k].length)) delete next[k]
+    router.replace({ query: next })                                   // push 면 글자마다 히스토리
+  }
+  return { params, set }
+}
+`,
+        },
+        {
+          id: 'l5', short: `이전 데이터 유지`,
+          title: `페이지를 넘길 때 표를 비우지 않는다. 이전 데이터 위에 흐리게 로딩한다`,
+          why: `페이지마다 표가 사라졌다 나타나면 높이가 튀고(CLS) 시선이 흔들립니다. 새 데이터가 올 때까지 이전 데이터를 그대로 두고 살짝 흐리게 하면 안정적입니다. useFetch 는 기본으로 이전 값을 유지하므로 status 만 보면 됩니다.`,
+          bad: String.raw`
+<Spinner v-if="status === 'pending'" />
+<table v-else>...</table>          <!-- 페이지 넘길 때마다 표 → 스피너 → 표 -->
+`,
+          good: String.raw`
+const { data, status } = await useFetch('/api/orders', { query, watch: [query], default: () => ({ items: [], total: 0 }) })
+// 조건이 바뀌어 다시 받는 동안 data 는 이전 값 유지 (Nuxt 기본). 첫 로드만 스켈레톤
+
+<TableSkeleton v-if="status === 'pending' && !data.items.length" :rows="20" />
+<table v-else :class="{ refreshing: status === 'pending' }" aria-busy="status === 'pending'">...</table>
+<style>.refreshing { opacity: .6; pointer-events: none; transition: opacity .15s }</style>
+
+// 행 높이를 고정(또는 min-height) 하면 데이터가 바뀌어도 표 높이가 흔들리지 않는다
+// 페이지가 바뀌면 표 상단으로 스크롤: watch(() => params.page, () => tableEl.value?.scrollIntoView({ block: 'start' }))
+`,
+        },
+        {
+          id: 'l6', short: `선택 상태`,
+          title: `행 선택은 인덱스나 행 객체가 아니라 id 로 기억한다`,
+          why: `인덱스로 기억하면 정렬·페이지가 바뀌는 순간 엉뚱한 행이 선택됩니다. 행 객체로 기억하면 다시 받은 데이터는 새 객체라 포함 여부가 깨집니다. id 집합이면 페이지를 넘겨도 선택이 유지되고 "전체 N건 선택" 도 표현할 수 있습니다.`,
+          bad: String.raw`
+const selected = ref<number[]>([])          // 인덱스
+<input type="checkbox" :value="i" v-model="selected">
+// 또는 selected.value.includes(row) — 새로고침 후엔 항상 false
+`,
+          good: String.raw`
+const selected = ref(new Set<string>())
+const toggle = (id: string) => selected.value.has(id) ? selected.value.delete(id) : selected.value.add(id)
+const pageIds = computed(() => data.value.items.map((r) => r.id))
+const allOnPage = computed(() => pageIds.value.length > 0 && pageIds.value.every((id) => selected.value.has(id)))
+function toggleAll() { allOnPage.value ? pageIds.value.forEach((id) => selected.value.delete(id)) : pageIds.value.forEach((id) => selected.value.add(id)) }
+
+<input type="checkbox" :checked="allOnPage" :indeterminate="!allOnPage && pageIds.some((id) => selected.has(id))" @change="toggleAll" aria-label="이 페이지 전체 선택">
+<input v-for="row in data.items" type="checkbox" :checked="selected.has(row.id)" @change="toggle(row.id)" :aria-label="row.name + ' 선택'">
+
+// "검색 결과 1,234건 전체 선택" 은 id 를 다 모으지 않고 { all: true, query } 를 서버에 보내 서버가 같은 조건으로 처리
+// 조건이 바뀌면 선택을 비운다: watch(() => params.q, () => selected.value.clear())
+`,
+        },
+        {
+          id: 'l7', short: `빈 상태와 오류`,
+          title: `"데이터 없음", "검색 결과 없음", "불러오기 실패" 는 다른 화면이다`,
+          why: `세 상황을 빈 표 하나로 보여 주면 사용자는 뭘 해야 할지 모릅니다. 처음이라 없으면 만들기 안내, 검색 결과가 없으면 조건 바꾸기, 실패면 다시 시도. 상태를 구분해 그립니다.`,
+          bad: String.raw`
+<tr v-if="!data.items.length"><td colspan="6">데이터가 없습니다</td></tr>
+`,
+          good: String.raw`
+<template v-if="status === 'error'">
+  <EmptyState icon="alert" title="목록을 불러오지 못했습니다" :description="userMessage(error)"><button @click="refresh">다시 시도</button></EmptyState>
+</template>
+<template v-else-if="status === 'success' && !data.items.length">
+  <EmptyState v-if="hasFilters" icon="search" title="조건에 맞는 주문이 없습니다"><button @click="set({ q: '', status: [] })">필터 초기화</button></EmptyState>
+  <EmptyState v-else icon="box" title="아직 주문이 없습니다" description="첫 주문이 들어오면 여기에 보입니다"><NuxtLink to="/products">상품 보기</NuxtLink></EmptyState>
+</template>
+<table v-else>...</table>
+<!-- EmptyState 는 공용 컴포넌트 하나: 아이콘·제목·설명·슬롯. 표 안이 아니라 표 자리에 -->
+`,
+        },
+        {
+          id: 'l8', short: `컬럼 정의`,
+          title: `컬럼은 템플릿에 박지 않고 배열로 선언한다`,
+          why: `th 와 td 를 손으로 짝 맞추면 컬럼 하나 추가에 두 곳을 고치고, 정렬 가능 여부·너비·숨김이 흩어집니다. { key, label, sortable, width, render } 배열 하나면 헤더와 셀이 같은 소스에서 나오고, 사용자 컬럼 숨기기도 쉽습니다.`,
+          bad: String.raw`
+<thead><tr><th>주문번호</th><th @click="sortBy('amount')">금액</th><th>상태</th>...</tr></thead>
+<tbody><tr v-for="o in rows"><td>{{ o.id }}</td><td>{{ fmt(o.amount) }}</td><td><Badge :s="o.status" /></td>...</tr></tbody>
+`,
+          good: String.raw`
+const columns: Column<Order>[] = [
+  { key: 'id', label: '주문번호', width: '120px' },
+  { key: 'createdAt', label: '주문일', sortable: true, format: (v) => formatDate(v, 'MM-dd HH:mm') },
+  { key: 'customer', label: '고객', value: (o) => o.customer.name },
+  { key: 'amount', label: '금액', sortable: true, align: 'right', format: (v) => v.toLocaleString() + '원' },
+  { key: 'status', label: '상태', sortable: true, cell: 'status' }          // 슬롯 이름
+]
+<DataTable :columns="columns" :rows="data.items" :sort="params.sort" :dir="params.dir" @sort="(k) => set({ sort: k, dir: ... })">
+  <template #cell-status="{ row }"><OrderStatusBadge :status="row.status" /></template>
+</DataTable>
+// DataTable 은 columns 를 돌며 th/td 를 그린다. 숨김은 columns.filter(c => !hidden.has(c.key)). 사용자 설정은 localStorage
+`,
+        },
+        {
+          id: 'l9', short: `가상 스크롤`,
+          title: `한 화면에 수백 행을 넘기면 보이는 행만 그린다`,
+          why: `DOM 행 2,000개는 스크롤이 버벅이고 메모리를 먹습니다. 보통은 페이지네이션(01번) 으로 100행 이하를 유지하면 되지만, 로그·채팅·긴 선택 목록처럼 한 번에 쭉 봐야 하면 가상 스크롤입니다. 행 높이가 고정이면 쉽고, 가변이면 동적 측정 옵션을 씁니다.`,
+          bad: String.raw`
+<tr v-for="row in rows" :key="row.id">...</tr>     <!-- rows.length === 5000 -->
+`,
+          good: String.raw`
+// 1) 먼저: 정말 한 번에 다 보여야 하나? 페이지·검색·필터로 100행 이하면 가상 스크롤이 필요 없다
+// 2) 필요하면 @tanstack/vue-virtual 또는 vue-virtual-scroller
+import { useVirtualizer } from '@tanstack/vue-virtual'
+const parent = useTemplateRef('parent')
+const v = useVirtualizer({ count: rows.value.length, getScrollElement: () => parent.value, estimateSize: () => 44, overscan: 10 })
+
+<div ref="parent" class="h-[600px] overflow-auto" role="grid">
+  <div :style="{ height: v.getTotalSize() + 'px', position: 'relative' }">
+    <div v-for="item in v.getVirtualItems()" :key="rows[item.index].id" :style="{ position: 'absolute', top: 0, transform: 'translateY(' + item.start + 'px)', height: item.size + 'px' }" role="row">
+      <RowCells :row="rows[item.index]" />
+    </div>
+  </div>
+</div>
+// 테이블 시맨틱이 깨지므로 role=grid/row/gridcell 로 보완. 가변 높이는 measureElement 를 ref 로 넘긴다
+// 행 컴포넌트는 가볍게: 행마다 watch·computed 10개면 가상화해도 느리다
+`,
+        },
+        {
+          id: 'l10', short: `모바일`,
+          title: `좁은 화면에서 표는 가로 스크롤이나 카드로 바뀐다`,
+          why: `8컬럼 표를 폰에서 그대로 두면 글자가 깨지거나 한 컬럼만 보입니다. 선택지는 둘입니다. 중요한 컬럼 2~3개만 남기고 나머지는 카드형으로 접거나, 표 전체를 가로 스크롤 영역에 넣고 첫 컬럼을 고정합니다.`,
+          bad: String.raw`
+<table class="w-full">...8 columns...</table>   <!-- 360px 에서 각 컬럼 40px -->
+`,
+          good: String.raw`
+<!-- 방법 A: 컬럼 정의에 우선순위를 두고 좁으면 카드로 -->
+const columns = [{ key: 'id', priority: 1 }, { key: 'amount', priority: 1 }, { key: 'status', priority: 2 }, { key: 'customer', priority: 3 }, ...]
+const isNarrow = useMediaQuery('(max-width: 640px)')
+<ul v-if="isNarrow" class="cards">
+  <li v-for="o in rows" :key="o.id" class="card">
+    <div class="row between"><b>{{ o.id }}</b><OrderStatusBadge :status="o.status" /></div>
+    <div>{{ o.customer.name }} · {{ o.amount.toLocaleString() }}원</div>
+    <details><summary>더 보기</summary>...나머지 컬럼...</details>
+  </li>
+</ul>
+<DataTable v-else ... />
+
+<!-- 방법 B: 가로 스크롤 + 첫 컬럼 고정 -->
+<div class="overflow-x-auto"><table class="min-w-[800px]"><th class="sticky left-0 bg-white">...</th></table></div>
+<!-- 어느 쪽이든 행 클릭 → 상세 화면이 모바일의 주 동선. 셀 안 버튼 7개는 ⋯ 메뉴로 모은다 -->
+`,
+        },
+      ],
+    },
+    {
+      id: 'vue-27', no: 27, name: `에러 처리, 로깅, 모니터링`,
+      lead: `오류를 삼키지 않고, 사용자에게는 할 수 있는 일을, 개발자에게는 원인을 보여 주는 습관입니다. Nuxt 의 에러 흐름, 로그의 모양, 민감정보, 소스맵, 알림 임계까지.`,
+      lessons: [
+        {
+          id: 'l1', short: `삼키지 않기`,
+          title: `빈 catch 는 없다. 처리하거나, 보고하거나, 다시 던진다`,
+          why: `catch {} 는 오류를 없애는 게 아니라 숨깁니다. 사용자는 아무 일도 안 일어난 화면을 보고, 개발자는 로그가 없어 영원히 모릅니다. 처리할 수 없는 오류는 보고(report) 하고 상위로 던집니다.`,
+          bad: String.raw`
+try { await save() } catch (e) {}
+try { await save() } catch (e) { console.log(e) }       // 운영에서는 아무도 안 본다
+promise.then(...)                                        // catch 없음: unhandledrejection
+`,
+          good: String.raw`
+try {
+  await save()
+} catch (e) {
+  const err = toApiError(e)                               // 한 모양으로 (실무 코드 2회차 02번)
+  if (err.isValidation) { setErrors(err.fields); return } // 처리할 수 있는 것: 처리
+  report(err, { where: 'OrderForm.save', orderId })       // 처리 못 하는 것: 보고
+  toast.error(userMessage(err))                           // 사용자에게는 번역된 문구
+}
+// 정말 무시해도 되는 오류는 왜 무시하는지 적는다
+try { localStorage.setItem(k, v) } catch { /* 사생활 모드·용량 초과: 저장 안 돼도 동작에 지장 없음 */ }
+`,
+        },
+        {
+          id: 'l2', short: `createError`,
+          title: `서버 오류는 createError 로 상태 코드와 사용자 문구를 함께 던진다`,
+          why: `throw new Error('없음') 은 500 으로 나가고 문구는 노출되거나 사라집니다. createError({ statusCode, statusMessage, data }) 는 Nitro 가 올바른 상태 코드로 응답하고, 클라이언트의 useFetch error 와 error.vue 가 그대로 읽습니다. 4xx 문구는 사용자용, 5xx 는 내부 정보를 담지 않습니다.`,
+          bad: String.raw`
+if (!order) throw new Error('order not found')          // 500 + 스택 노출(dev)
+if (!allowed) return { error: 'forbidden' }              // 200 으로 오류: 클라이언트가 못 알아챈다
+`,
+          good: String.raw`
+if (!order) throw createError({ statusCode: 404, statusMessage: '주문을 찾을 수 없습니다' })
+if (!allowed) throw createError({ statusCode: 403, statusMessage: '권한이 없습니다' })
+if (!parsed.success) throw createError({ statusCode: 400, statusMessage: '입력을 확인하세요', data: { code: 'VALIDATION', fields: fieldErrors(parsed.error) } })
+
+// 예상 못 한 오류: 그대로 두면 Nitro 가 500 으로 바꾼다. 문구는 운영에서 숨겨진다
+// 내부 사유는 로그에만: console.error('[orders] confirm failed', { orderId, err }) 후 throw createError({ statusCode: 500, statusMessage: '결제 확인 중 오류가 발생했습니다' })
+
+// 클라이언트에서 읽기: error.value.statusCode, error.value.statusMessage, error.value.data.fields
+`,
+        },
+        {
+          id: 'l3', short: `fatal 과 지역 오류`,
+          title: `페이지 전체가 의미 없는 오류만 fatal, 나머지는 그 자리에서 처리한다`,
+          why: `상품 상세에서 상품이 없으면 페이지 자체가 의미 없으니 404 전체 화면이 맞습니다. 그런데 추천 상품 위젯이 실패했다고 전체를 오류 페이지로 보내면 안 됩니다. useFetch 의 error 를 그 위젯 안에서 처리하고, fatal 은 핵심 데이터에만.`,
+          bad: String.raw`
+const { data: recs, error } = await useFetch('/api/recommend')
+if (error.value) throw createError({ ...error.value, fatal: true })   // 추천 실패로 상품 페이지 전체가 죽는다
+`,
+          good: String.raw`
+// 핵심 데이터: 없으면 페이지가 의미 없다 → fatal
+const { data: product, error } = await useFetch('/api/products/' + id)
+if (error.value) throw createError({ statusCode: error.value.statusCode ?? 500, statusMessage: error.value.statusMessage, fatal: true })
+
+// 부가 위젯: 자기 자리에서
+const { data: recs, error: recError, refresh } = await useLazyFetch('/api/recommend', { query: { id } })
+<section>
+  <h2>이런 상품은 어때요</h2>
+  <InlineError v-if="recError" message="추천을 불러오지 못했습니다" @retry="refresh" />
+  <ProductRow v-else :items="recs" />
+</section>
+// <NuxtErrorBoundary> 로 렌더 오류도 그 영역만: <NuxtErrorBoundary @error="report"><Widget /><template #error="{ error, clearError }">…</template></NuxtErrorBoundary>
+`,
+        },
+        {
+          id: 'l4', short: `error.vue`,
+          title: `전체 오류 페이지는 상태 코드별로 다르게, 복구 버튼과 함께`,
+          why: `404 와 500 은 사용자가 할 일이 다릅니다. 404 는 홈이나 검색으로, 500 은 다시 시도. 운영에서는 스택을 보여 주지 않고, 오류 id(requestId) 를 보여 주면 문의 때 바로 찾을 수 있습니다. clearError 로 앱 상태를 유지한 채 복귀합니다.`,
+          bad: String.raw`
+<!-- error.vue -->
+<template><div>오류가 발생했습니다: {{ error.message }}</div></template>   <!-- 500 스택이 그대로, 돌아갈 길 없음 -->
+`,
+          good: String.raw`
+<!-- error.vue -->
+<script setup lang="ts">
+import type { NuxtError } from '#app'
+const props = defineProps<{ error: NuxtError }>()
+const is404 = computed(() => props.error.statusCode === 404)
+const requestId = computed(() => (props.error.data as any)?.requestId)
+onMounted(() => { if (!is404.value) report(props.error, { fatal: true }) })     // 404 는 보고하지 않는다 (소음)
+useHead({ title: is404.value ? '페이지를 찾을 수 없습니다' : '오류' })
+</script>
+<template>
+  <NuxtLayout name="minimal">
+    <main class="center">
+      <h1>{{ is404 ? '페이지를 찾을 수 없습니다' : '문제가 발생했습니다' }}</h1>
+      <p v-if="is404">주소가 바뀌었거나 삭제된 페이지입니다.</p>
+      <p v-else>잠시 후 다시 시도해 주세요. 계속되면 아래 번호로 문의해 주세요.</p>
+      <p v-if="requestId" class="tiny muted">오류 번호: {{ requestId }}</p>
+      <pre v-if="$config.public.dev">{{ error.stack }}</pre>
+      <div class="row gap">
+        <button v-if="!is404" @click="clearError()">다시 시도</button>
+        <button @click="clearError({ redirect: '/' })">홈으로</button>
+      </div>
+    </main>
+  </NuxtLayout>
+</template>
+`,
+        },
+        {
+          id: 'l5', short: `전역 수집`,
+          title: `Vue 오류, Promise 거부, 일반 오류를 한 report() 로 모은다`,
+          why: `컴포넌트 렌더 오류는 errorHandler 로, await 없는 Promise 는 unhandledrejection 으로, 이벤트 핸들러 밖 오류는 window.error 로 새어 나갑니다. 네 경로를 한 함수로 모으면 어디서 났든 같은 형식으로 보고됩니다. 취소·네트워크는 걸러 소음을 줄입니다.`,
+          bad: String.raw`
+// 아무 설정 없음. 운영에서 난 오류는 사용자 브라우저 콘솔에만 있다
+`,
+          good: String.raw`
+// plugins/error.client.ts
+export default defineNuxtPlugin((nuxtApp) => {
+  nuxtApp.vueApp.config.errorHandler = (err, instance, info) => report(err, { source: 'vue', info, component: instance?.$options.__name })
+  nuxtApp.hook('vue:error', (err, _, info) => report(err, { source: 'nuxt', info }))
+  window.addEventListener('unhandledrejection', (e) => { report(e.reason, { source: 'promise' }); e.preventDefault() })
+  window.addEventListener('error', (e) => report(e.error ?? e.message, { source: 'window', file: e.filename, line: e.lineno }))
+})
+
+export function report(err: unknown, ctx: Record<string, unknown> = {}) {
+  const e = toApiError(err)
+  if (e.code === 'CANCELED' || e.isNetwork || e.status === 401) return     // 취소, 오프라인, 인증 만료는 오류가 아니다
+  if (seenRecently(e)) return                                               // 같은 오류 1분에 한 번만 (루프 폭주 방지)
+  console.error('[report]', e, ctx)
+  Sentry.captureException(e.raw ?? e, { extra: ctx, tags: { source: ctx.source } })
+}
+// 서버 쪽은 nitro 플러그인: nitroApp.hooks.hook('error', (err, { event }) => log.error({ err, path: event?.path, requestId: event?.context.requestId }))
+`,
+        },
+        {
+          id: 'l6', short: `구조화 로그`,
+          title: `서버 로그는 문장이 아니라 JSON 한 줄이고, 레벨과 requestId 가 있다`,
+          why: `console.log('주문 저장 ' + id) 는 검색도 집계도 안 됩니다. { level, msg, requestId, userId, orderId, ms } 한 줄이면 로그 시스템에서 "이 요청의 전부", "이 사용자의 오류", "500ms 넘는 요청" 을 바로 뽑습니다.`,
+          bad: String.raw`
+console.log('order saved ' + order.id)
+console.log('error!!', e)
+console.log(JSON.stringify(req.body))     // 비밀번호가 로그에
+`,
+          good: String.raw`
+// server/utils/log.ts (pino)
+import pino from 'pino'
+export const log = pino({ level: process.env.LOG_LEVEL ?? 'info', redact: ['password', 'token', '*.password', 'headers.authorization', 'headers.cookie'] })
+
+// server/middleware/request.ts — 요청마다 id 와 자식 로거
+export default defineEventHandler((event) => {
+  const requestId = getHeader(event, 'x-request-id') ?? randomUUID()
+  event.context.requestId = requestId
+  event.context.log = log.child({ requestId, path: event.path, method: event.method })
+  setHeader(event, 'x-request-id', requestId)                            // 클라이언트도 받아 오류 화면에 보여 준다 (04번)
+  const start = performance.now()
+  event.node.res.on('finish', () => event.context.log.info({ status: event.node.res.statusCode, ms: Math.round(performance.now() - start) }, 'request'))
+})
+
+// 핸들러에서
+event.context.log.info({ orderId: order.id, amount: order.amount }, 'order confirmed')
+event.context.log.error({ err, orderId }, 'pg confirm failed')            // err 는 pino 가 stack 포함 직렬화
+// 레벨: debug(개발), info(정상 흐름의 이정표), warn(이상하지만 처리됨), error(실패)
+`,
+        },
+        {
+          id: 'l7', short: `민감정보`,
+          title: `로그와 오류 보고에 토큰·비밀번호·개인정보를 넣지 않는다`,
+          why: `오류 보고 도구에 요청 본문을 통째로 붙이면 비밀번호와 카드번호가 제3자 서버에 저장됩니다. 로그는 오래 남고 많은 사람이 봅니다. 식별에 필요한 id 만 남기고, 본문은 마스킹하거나 키 목록만 남깁니다.`,
+          bad: String.raw`
+Sentry.captureException(e, { extra: { body: req.body, headers: req.headers, user } })
+log.info({ user }, 'login')               // email, phone, address 전부
+`,
+          good: String.raw`
+// 보고에는 id 와 모양만
+Sentry.captureException(e, { extra: { bodyKeys: Object.keys(body), orderId }, user: { id: user.id } })   // 이메일·이름 없이 id 만
+log.info({ userId: user.id }, 'login')
+
+// 마스킹 유틸
+const mask = (s: string) => s.length <= 4 ? '****' : s.slice(0, 2) + '*'.repeat(s.length - 4) + s.slice(-2)
+log.info({ phone: mask(phone) }, 'sms sent')
+
+// Sentry 설정: beforeSend 로 한 번 더 거른다
+Sentry.init({ beforeSend(event) { delete event.request?.cookies; delete event.request?.headers?.Authorization; return event }, sendDefaultPii: false })
+// 클라이언트 breadcrumb 의 입력값: Sentry 의 maskAllText / 입력 필드 data-sentry-mask. 세션 리플레이는 기본 마스킹을 끄지 않는다
+`,
+        },
+        {
+          id: 'l8', short: `소스맵과 릴리즈`,
+          title: `보고된 스택이 app.3f2a.js:1:48213 이면 의미가 없다. 소스맵과 릴리즈를 올린다`,
+          why: `운영 번들은 압축돼 있어 스택만으로는 어느 줄인지 모릅니다. 빌드 때 소스맵을 Sentry 에 올리고 릴리즈(커밋 해시) 를 붙이면 원본 줄과 "어느 배포부터" 가 보입니다. 소스맵은 공개 서버에 두지 않습니다.`,
+          bad: String.raw`
+// 소스맵 없음. 오류: "TypeError: Cannot read properties of undefined (reading 'id') at a.3f2a.js:1:48213"
+// 소스맵을 .output/public 에 그대로 두어 누구나 원본 코드를 본다
+`,
+          good: String.raw`
+// nuxt.config.ts — @sentry/nuxt
+export default defineNuxtConfig({
+  modules: ['@sentry/nuxt/module'],
+  sentry: { sourceMapsUploadOptions: { org: 'my-org', project: 'web', authToken: process.env.SENTRY_AUTH_TOKEN } },   // 빌드 시 업로드 후 삭제
+  sourcemap: { client: 'hidden' }                                       // 생성은 하되 번들에 //# sourceMappingURL 를 넣지 않는다
+})
+// sentry.client.config.ts
+Sentry.init({ dsn, release: process.env.NUXT_PUBLIC_RELEASE, environment: process.env.NUXT_PUBLIC_ENV, tracesSampleRate: 0.1, replaysOnErrorSampleRate: 0.5 })
+// CI: NUXT_PUBLIC_RELEASE=$GITHUB_SHA → "이 오류는 커밋 a1b2c3 배포 뒤 시작" 이 보인다
+// 배포 후 10분 오류율 비교 → 급증하면 롤백. 이게 릴리즈 태그의 진짜 용도
+`,
+        },
+        {
+          id: 'l9', short: `사용자 행동 기록`,
+          title: `오류 앞 30초의 행동(클릭, 라우트, 요청) 을 함께 보낸다`,
+          why: `"undefined 의 id 를 읽음" 만으로는 재현이 안 됩니다. 어느 페이지에서 무엇을 누르고 어떤 요청이 실패한 뒤 났는지가 있어야 합니다. Sentry breadcrumb 이 자동으로 상당 부분을 남기고, 라우트 전환과 주요 액션은 직접 추가합니다.`,
+          bad: String.raw`
+// 보고: 스택만. 재현 불가 → "다시 발생하면 알려 주세요"
+`,
+          good: String.raw`
+// plugins/breadcrumbs.client.ts
+export default defineNuxtPlugin(() => {
+  const router = useRouter()
+  router.afterEach((to, from) => Sentry.addBreadcrumb({ category: 'navigation', message: from.path + ' → ' + to.path, level: 'info' }))
+})
+// API 계층 (실무 코드 2회차) 의 인터셉터에서: 실패 응답마다 breadcrumb { category: 'api', data: { url, status, requestId } }
+// 주요 액션: Sentry.addBreadcrumb({ category: 'ui', message: 'checkout.pay', data: { orderId } })
+// 사용자 식별: 로그인 시 Sentry.setUser({ id: user.id }); 로그아웃 시 setUser(null)
+// 서버 requestId 를 태그로: Sentry.setTag('requestId', res.headers['x-request-id']) → 서버 로그(06번) 와 붙는다
+// 세션 리플레이(화면 녹화) 는 오류 발생 세션만 (replaysOnErrorSampleRate), 입력값은 마스킹 (07번)
+`,
+        },
+        {
+          id: 'l10', short: `알림 임계`,
+          title: `오류 하나하나가 아니라 비율과 신규 오류에 알림을 건다`,
+          why: `오류마다 슬랙이 울리면 하루 만에 아무도 안 봅니다. "새로운 종류의 오류", "5분 오류율 1% 초과", "특정 오류 1시간 100건 초과" 처럼 임계를 두고, 배포 직후는 더 민감하게 봅니다. 알림은 대응 담당과 런북 링크가 있어야 의미가 있습니다.`,
+          bad: String.raw`
+// Sentry → Slack: 모든 이벤트. 하루 400개 메시지. 채널 뮤트
+`,
+          good: String.raw`
+/* 알림 규칙 (Sentry Alerts 또는 로그 시스템)
+   1. 새 이슈 (처음 보는 오류)                → 즉시, #web-alerts
+   2. 오류율: 5분간 요청 대비 오류 > 1%        → 즉시, 온콜 호출
+   3. 특정 이슈 1시간 > 100건                  → 1시간에 한 번
+   4. 결제 confirm 실패 (태그 flow=payment)    → 3건이면 즉시 (돈이 걸린 흐름은 따로)
+   5. 배포 후 30분 오류율이 이전 1시간의 2배    → 릴리즈 비교 알림 (08번 릴리즈 태그)
+   6. Web Vitals p75 가 목표 초과 3일 연속      → 주간 리포트로 (23회차)
+
+   제외: 404, 네트워크 오류, 취소, 봇 UA, 브라우저 확장 프로그램 스택(chrome-extension://)
+   모든 알림에: 담당 로테이션, 대시보드 링크, 런북 (무엇을 먼저 볼지) */
+
+// 클라이언트 보고 샘플링: 트래픽이 크면 같은 오류를 전부 보낼 필요가 없다
+Sentry.init({ sampleRate: 0.3, ignoreErrors: ['ResizeObserver loop', 'Non-Error promise rejection', /chrome-extension/] })
+`,
+        },
+      ],
+    },
+    {
+      id: 'vue-28', no: 28, name: `보안 (CSP, XSS, 의존성 점검)`,
+      lead: `프론트엔드에서 막을 수 있는 것과 서버가 막아야 하는 것을 구분하는 습관입니다. v-html, CSP, 토큰 저장, CSRF, 서버 검증, 리다이렉트, 환경변수, 의존성, 속도 제한, 헤더.`,
+      lessons: [
+        {
+          id: 'l1', short: `v-html`,
+          title: `v-html 에는 서버가 걸러 준 HTML 만 넣는다`,
+          why: `사용자 입력을 v-html 로 넣으면 그 사용자가 다른 사용자의 브라우저에서 스크립트를 실행합니다(XSS). Vue 의 {{ }} 는 자동으로 이스케이프되니 기본은 텍스트 바인딩. HTML 이 꼭 필요하면 서버에서 허용 목록으로 sanitize 한 결과만 넣습니다.`,
+          bad: String.raw`
+<div v-html="comment.body"></div>                    <!-- 사용자가 쓴 그대로 -->
+<div v-html="'<b>' + user.name + '</b>'"></div>       <!-- 이름에 <img onerror=…> -->
+<a :href="user.website">홈페이지</a>                   <!-- javascript:alert(1) -->
+`,
+          good: String.raw`
+<p>{{ comment.body }}</p>                               <!-- 기본: 텍스트 -->
+<b>{{ user.name }}</b>
+<div v-html="post.bodySanitized"></div>                 <!-- 서버가 sanitize-html 로 거른 것 (실무 코드 19회차 07번) -->
+<a :href="safeUrl(user.website)" rel="noopener noreferrer nofollow" target="_blank">홈페이지</a>
+
+// utils/safeUrl.ts
+export function safeUrl(u?: string) { try { const p = new URL(u ?? '', location.origin); return ['http:', 'https:', 'mailto:'].includes(p.protocol) ? p.href : '#' } catch { return '#' } }
+// 클라이언트에서 꼭 걸러야 하면 DOMPurify. 하지만 "서버가 저장할 때 거른다" 가 원칙: 저장된 것은 어디서 보여 줘도 안전하다
+`,
+        },
+        {
+          id: 'l2', short: `CSP`,
+          title: `Content-Security-Policy 로 인라인 스크립트와 외부 출처를 제한한다`,
+          why: `XSS 가 뚫려도 CSP 가 있으면 외부 스크립트 로드와 인라인 실행이 막혀 피해가 줄어듭니다. 인라인은 nonce 로만 허용하고 출처는 허용 목록으로. nuxt-security 모듈이 헤더와 nonce 주입을 맡습니다. Report-Only 로 시작해 위반을 보고 조정합니다.`,
+          bad: String.raw`
+// CSP 없음. 또는 script-src 'unsafe-inline' 'unsafe-eval' * — 있으나 마나
+`,
+          good: String.raw`
+// nuxt.config.ts — nuxt-security
+export default defineNuxtConfig({
+  modules: ['nuxt-security'],
+  security: {
+    nonce: true,                                                            // 모든 <script> 에 nonce 주입
+    headers: {
+      contentSecurityPolicy: {
+        'default-src': ["'self'"],
+        'script-src': ["'self'", "'nonce-{{nonce}}'", "'strict-dynamic'", 'https://js.tosspayments.com', 'https://dapi.kakao.com'],
+        'style-src': ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],   // 스타일 인라인은 보통 허용 (Vue 가 style 속성을 쓴다)
+        'img-src': ["'self'", 'data:', 'blob:', 'https://cdn.example.com'],
+        'connect-src': ["'self'", 'https://api.example.com', 'wss://rt.example.com', 'https://*.sentry.io'],
+        'font-src': ["'self'", 'https://fonts.gstatic.com'],
+        'frame-src': ['https://js.tosspayments.com'],
+        'object-src': ["'none'"], 'base-uri': ["'self'"], 'form-action': ["'self'"], 'frame-ancestors': ["'none'"],
+        'report-uri': ['/api/csp-report']
+      },
+      crossOriginEmbedderPolicy: false                                      // 외부 iframe(결제) 을 쓰면 끈다
+    }
+  }
+})
+// 도입 순서: Content-Security-Policy-Report-Only 로 1~2주 → 위반 리포트 보고 허용 목록 정리 → 강제
+// 새 서드파티를 넣을 때마다 connect-src/script-src 에 추가하는 것이 "누가 우리 페이지에서 뭘 하는지" 목록이 된다
+`,
+        },
+        {
+          id: 'l3', short: `토큰 저장`,
+          title: `리프레시 토큰은 httpOnly 쿠키, 액세스 토큰은 메모리. localStorage 에 두지 않는다`,
+          why: `localStorage 의 토큰은 XSS 한 줄로 전부 털립니다. httpOnly 쿠키는 스크립트가 못 읽고, 액세스 토큰은 짧게 살고 메모리에만 두면 새로고침 때 쿠키로 재발급합니다(실무 코드 1회차). 쿠키는 SameSite 와 Secure 를 꼭 붙입니다.`,
+          bad: String.raw`
+localStorage.setItem('accessToken', token)
+localStorage.setItem('refreshToken', refresh)        // XSS → 영구 탈취
+document.cookie = 'token=' + token                   // httpOnly 아님, SameSite 없음
+`,
+          good: String.raw`
+// server/api/auth/login.post.ts
+setCookie(event, 'rt', refreshToken, { httpOnly: true, secure: true, sameSite: 'lax', path: '/api/auth', maxAge: 60 * 60 * 24 * 14 })   // 재발급 경로에만 전송
+return { accessToken, expiresIn: 900 }                // 15분. 클라이언트는 메모리(Pinia) 에만
+
+// 클라이언트: 새로고침 → 메모리 비어 있음 → POST /api/auth/refresh (쿠키 자동) → 새 액세스 토큰
+// nuxt-auth-utils 를 쓰면 세션 전체가 암호화된 httpOnly 쿠키 (파인코드 13회차)
+// 로그아웃: 서버가 refresh 토큰을 폐기(DB) + 쿠키 삭제. 클라이언트 메모리 비움. "클라이언트만 지우기" 는 로그아웃이 아니다
+`,
+        },
+        {
+          id: 'l4', short: `CSRF`,
+          title: `쿠키 인증이면 CSRF 를 막는다: SameSite + Origin 검사 (+ 토큰)`,
+          why: `쿠키는 다른 사이트의 폼이 우리 API 로 요청해도 자동으로 붙습니다. SameSite=Lax 가 대부분을 막지만 서브도메인·구형 브라우저·GET 으로 상태를 바꾸는 API 는 구멍입니다. 상태를 바꾸는 요청은 Origin 헤더를 확인하고, 필요하면 CSRF 토큰(double submit) 을 씁니다.`,
+          bad: String.raw`
+// GET /api/orders/123/cancel 로 취소. <img src="https://example.com/api/orders/123/cancel"> 한 줄에 당한다
+// 쿠키에 SameSite 없음, Origin 검사 없음
+`,
+          good: String.raw`
+// 1) 상태 변경은 POST/PUT/DELETE 만. GET 은 읽기만
+// 2) 쿠키 SameSite=Lax (03번). 외부에서 우리 사이트로 들어오는 톱레벨 GET 에만 쿠키가 간다
+// 3) 서버 미들웨어: 변경 요청의 Origin 검사
+export default defineEventHandler((event) => {
+  if (['GET', 'HEAD', 'OPTIONS'].includes(event.method)) return
+  const origin = getHeader(event, 'origin') ?? new URL(getHeader(event, 'referer') ?? '', 'http://x').origin
+  const allowed = [useRuntimeConfig().public.siteUrl, 'https://admin.example.com']
+  if (!allowed.includes(origin)) throw createError({ statusCode: 403, statusMessage: 'bad origin' })
+})
+// 4) 더 엄격히: nuxt-csurf 모듈 (double-submit 토큰). Bearer 토큰 헤더 인증이면 CSRF 가 성립하지 않으므로 생략 가능
+// CORS: Access-Control-Allow-Origin: * 와 credentials 를 함께 두지 않는다. 허용 출처를 명시
+`,
+        },
+        {
+          id: 'l5', short: `서버 검증`,
+          title: `프론트 검증은 UX 이고, 서버 검증이 보안이다. 둘 다 같은 스키마로`,
+          why: `폼의 required, 버튼 disabled, 금액 계산은 전부 브라우저에서 바뀔 수 있습니다. 서버가 모든 입력을 다시 검증하고 금액·권한·소유를 다시 계산해야 합니다. 스키마(zod) 를 공유하면 두 벌 유지가 아니라 한 벌입니다.`,
+          bad: String.raw`
+// 프론트: <input required min="1"> + "총액 15,000원" 계산 → POST { items, total: 15000 }
+// 서버: await db.order.create({ data: body })        // 받은 total 을 그대로, 다른 사람 addressId 도 그대로
+`,
+          good: String.raw`
+// shared/schemas/order.ts — 양쪽에서 import
+export const CreateOrder = z.object({ items: z.array(z.object({ productId: z.string().uuid(), qty: z.number().int().min(1).max(99) })).min(1).max(50), addressId: z.string().uuid(), couponCode: z.string().max(30).optional() }).strict()
+
+// 서버
+const body = CreateOrder.parse(await readBody(event))              // 모르는 키(total, userId, isAdmin) 는 strict 로 거부
+const address = await db.address.findFirst({ where: { id: body.addressId, userId: user.id } })   // 소유 확인
+if (!address) throw createError({ statusCode: 400, statusMessage: '배송지를 확인하세요' })
+const amount = await calculateAmount(body.items, body.couponCode, user)   // 금액은 서버가 (실무 코드 11회차 02번)
+
+// 프론트: toTypedSchema(CreateOrder) 로 같은 규칙. 메시지도 같다
+// Prisma: data: body 처럼 객체를 통째로 넘기지 않는다 (mass assignment). 필드를 골라 넣는다
+`,
+        },
+        {
+          id: 'l6', short: `권한은 서버`,
+          title: `v-if="isAdmin" 은 UI 일 뿐이다. 모든 API 가 권한을 다시 검사한다`,
+          why: `버튼을 숨겨도 API 주소는 보입니다. 삭제 버튼이 안 보이는 사용자가 DELETE 요청을 직접 보낼 수 있습니다. 라우트 미들웨어도 클라이언트 코드라 우회됩니다. 권한 판단은 서버 핸들러마다, 그리고 "이 리소스가 이 사용자 것인지" 까지.`,
+          bad: String.raw`
+<button v-if="auth.isAdmin" @click="remove(id)">삭제</button>
+// server/api/posts/[id].delete.ts: await db.post.delete({ where: { id } })     // 누구나
+// GET /api/orders/123 — 로그인만 확인, 123 이 내 주문인지는 안 봄 (IDOR)
+`,
+          good: String.raw`
+// server/api/posts/[id].delete.ts
+export default defineEventHandler(async (event) => {
+  const user = await requireUser(event)
+  const post = await db.post.findUnique({ where: { id: getRouterParam(event, 'id')! }, select: { authorId: true } })
+  if (!post) throw createError({ statusCode: 404 })
+  if (post.authorId !== user.id && !can(user, 'post:delete:any')) throw createError({ statusCode: 403 })   // 소유자 또는 권한 (실무 코드 8회차)
+  await db.post.delete({ where: { id: post.id } })
+})
+// 목록·조회도 where 에 userId 를 넣는다: db.order.findMany({ where: { userId: user.id } }). "id 만으로 조회" 는 관리자 API 에서만
+// 프론트의 v-if / 미들웨어는 "쓸데없는 403 을 안 보여 주기 위한" 편의. 보안은 여기서 끝난다
+`,
+        },
+        {
+          id: 'l7', short: `리다이렉트`,
+          title: `?redirect= 는 우리 사이트 내부 경로만 허용한다`,
+          why: `로그인 후 돌아갈 주소를 쿼리로 받으면 공격자가 https://example.com/login?redirect=https://evil.com 을 보내 로그인 뒤 가짜 사이트로 보낼 수 있습니다(오픈 리다이렉트). 슬래시로 시작하는 내부 경로만, 그리고 //evil.com 같은 변형도 막습니다.`,
+          bad: String.raw`
+await navigateTo(route.query.redirect as string)            // 아무 데나
+`,
+          good: String.raw`
+export function safeRedirect(target: unknown, fallback = '/') {
+  if (typeof target !== 'string') return fallback
+  if (!target.startsWith('/') || target.startsWith('//') || target.startsWith('/\\')) return fallback   // 외부, 프로토콜 상대, 역슬래시
+  try { const u = new URL(target, 'http://x'); if (u.origin !== 'http://x') return fallback; return u.pathname + u.search + u.hash } catch { return fallback }
+}
+await navigateTo(safeRedirect(route.query.redirect))
+// 서버 sendRedirect 도 같은 함수로. 외부로 보내야 하는 공유 링크(실무 코드 18회차 07번) 는 DB 에 저장된 URL 만, 사용자 입력 URL 은 아니다
+`,
+        },
+        {
+          id: 'l8', short: `환경변수 노출`,
+          title: `runtimeConfig.public 과 NUXT_PUBLIC_ 은 브라우저로 간다. 비밀은 절대 넣지 않는다`,
+          why: `public 에 넣은 값은 HTML 에 그대로 박혀 누구나 봅니다. PG secret, DB URL, 서드파티 서버 키가 public 에 들어가면 그대로 유출입니다. 비밀은 runtimeConfig 최상위(서버 전용) 에, 클라이언트가 필요한 건 서버 API 를 거칩니다. 빌드 산출물을 grep 해 확인합니다.`,
+          bad: String.raw`
+runtimeConfig: { public: { openaiKey: process.env.OPENAI_KEY, dbUrl: process.env.DATABASE_URL } }
+// 브라우저 콘솔: useRuntimeConfig().public.openaiKey → 노출
+`,
+          good: String.raw`
+runtimeConfig: {
+  openaiKey: '',                        // NUXT_OPENAI_KEY — 서버에서만 useRuntimeConfig().openaiKey
+  databaseUrl: '',
+  public: { siteUrl: '', kakaoJsKey: '' } // 브라우저에서도 써야 하는 것만. kakao JS 키는 도메인 제한이 있어 공개해도 되는 키
+}
+// 클라이언트가 AI 를 써야 하면: server/api/ai/complete.post.ts 가 키를 들고 호출 (+ 인증 + 사용량 제한)
+
+# 배포 전 점검
+grep -rl "sk_live\|AKIA\|BEGIN PRIVATE" .output/public && echo "LEAK"   # 번들에 키 패턴이 있으면 실패
+# .env 는 .gitignore, .env.example 만 커밋. 실수로 올린 키는 "삭제" 가 아니라 "폐기·재발급"
+`,
+        },
+        {
+          id: 'l9', short: `의존성`,
+          title: `lockfile 을 커밋하고, 취약점 점검을 CI 에 넣고, 설치 스크립트를 의심한다`,
+          why: `npm 패키지 하나가 수백 개를 끌고 옵니다. lockfile 이 없으면 CI 마다 다른 버전이 설치되고, 취약 버전이 조용히 들어옵니다. audit 를 CI 에 두고, 가능하면 설치 스크립트(postinstall) 를 막고, 업데이트는 봇이 PR 로 올려 테스트가 돌게 합니다.`,
+          bad: String.raw`
+# package-lock.json 을 .gitignore 에
+# npm install (CI 에서도)
+# 2년 전 버전 그대로, npm audit 는 "나중에"
+`,
+          good: String.raw`
+# CI
+npm ci                                         # lockfile 그대로. 다르면 실패
+npm audit --audit-level=high                   # high 이상이면 실패 (false positive 는 .nsprc / audit-ci 로 예외 + 사유)
+npx pnpm audit / yarn npm audit 도 같다
+
+# .npmrc
+ignore-scripts=true                            # postinstall 로 돌아가는 공급망 공격 차단. 꼭 필요한 패키지(sharp 등) 만 pnpm 의 onlyBuiltDependencies 로 허용
+engine-strict=true
+
+# 업데이트: Renovate / Dependabot 이 주 1회 PR → E2E(21회차) 가 돌고 초록이면 머지. 메이저는 사람이 본다
+# 새 패키지 추가 전: 주간 다운로드, 최근 커밋, 유지자 수, 의존성 개수(npx npm-why / bundlephobia). 기능 하나에 300개 끌려오면 직접 쓴다
+# 설치 직후 lockfile diff 를 본다: 요청하지 않은 패키지가 추가됐는지
+`,
+        },
+        {
+          id: 'l10', short: `속도 제한과 헤더`,
+          title: `로그인·발송·검색 API 는 속도 제한을 두고, 보안 헤더는 모듈로 기본값을 깐다`,
+          why: `로그인 무제한이면 비밀번호 대입, SMS 발송 무제한이면 요금 폭탄, 검색 무제한이면 DB 가 죽습니다. IP·사용자 단위로 제한하고 429 를 돌려줍니다. HSTS, X-Frame-Options, Referrer-Policy 같은 헤더는 nuxt-security 기본값이 거의 맞습니다.`,
+          bad: String.raw`
+// 로그인 API: 제한 없음. 10만 번 시도 가능
+// 헤더: 없음. 우리 페이지가 남의 iframe 에 들어가 클릭재킹
+`,
+          good: String.raw`
+// nuxt-security: 전역 기본 + 경로별
+security: {
+  rateLimiter: { tokensPerInterval: 150, interval: 60_000, driver: { name: 'redis' } },   // 전역 150/분/IP (여러 인스턴스면 redis)
+  headers: { strictTransportSecurity: { maxAge: 31536000, includeSubdomains: true }, xFrameOptions: 'DENY', referrerPolicy: 'strict-origin-when-cross-origin', permissionsPolicy: { camera: [], microphone: [], geolocation: ['self'] } }
+},
+routeRules: {
+  '/api/auth/login': { security: { rateLimiter: { tokensPerInterval: 5, interval: 60_000 } } },      // 5/분
+  '/api/auth/send-code': { security: { rateLimiter: { tokensPerInterval: 3, interval: 600_000 } } }, // 3/10분
+  '/api/search/**': { security: { rateLimiter: { tokensPerInterval: 60, interval: 60_000 } } }
+}
+// 로그인은 IP 외에 계정 단위로도: 같은 이메일 10회 실패 → 15분 잠금 + 알림 메일. 응답은 "이메일 또는 비밀번호가 틀립니다" 로 통일 (계정 존재 여부 숨김)
+// 클라이언트: 429 를 받으면 Retry-After 를 읽어 "N초 후 다시 시도" (실무 코드 2회차 03번은 429 를 자동 재시도하지 않는다)
+`,
+        },
+      ],
+    },
+    {
+      id: 'vue-29', no: 29, name: `모노레포와 패키지 구조`,
+      lead: `앱이 두 개 이상이거나 공유할 코드가 생길 때의 습관입니다. 워크스페이스로 묶고, 경계를 패키지로 긋고, 버전은 한 곳에서, 빌드는 캐시하고, 바뀐 것만 검사합니다.`,
+      lessons: [
+        {
+          id: 'l1', short: `언제`,
+          title: `공유 코드를 복붙하기 시작하면 모노레포, 그 전엔 레이어나 폴더`,
+          why: `앱 하나에 모노레포를 씌우면 도구만 늘어납니다. 반대로 웹·관리자·모바일웹이 같은 UI 와 API 타입을 복붙하면 세 벌이 어긋납니다. 신호는 "같은 코드를 두 저장소에 고친다" 입니다. Nuxt 앱끼리면 레이어(16회차) 로도 충분할 때가 많습니다.`,
+          bad: String.raw`
+# 저장소 3개: web/, admin/, mobile-web/  — 각자 components/ui/Button.vue, utils/format.ts, types/api.ts 복사본
+# 한 쪽 수정 → 나머지에 "나중에 반영" → 안 한다
+`,
+          good: String.raw`
+# 한 저장소, pnpm workspace
+apps/
+  web/            # Nuxt (고객)
+  admin/          # Nuxt (관리자)
+packages/
+  ui/             # 공용 컴포넌트 (Vue 라이브러리 또는 Nuxt 레이어)
+  api-types/      # 서버 응답 타입·zod 스키마 (서버·앱 공용)
+  config/         # eslint, tsconfig, tailwind 프리셋
+  utils/
+# 판단: 앱 1개면 폴더. 앱 2개 + 공유 UI 면 모노레포. 팀이 다르고 배포 주기가 다르면 다시 분리(npm 패키지 배포) 도 답
+`,
+        },
+        {
+          id: 'l2', short: `워크스페이스`,
+          title: `pnpm workspace 로 묶고, 내부 패키지는 workspace:* 로 참조한다`,
+          why: `상대 경로 import(../../packages/ui) 는 빌드 도구마다 깨지고 경계가 없습니다. 워크스페이스에 등록하면 @company/ui 처럼 보통 패키지로 import 하고, 심볼릭 링크라 수정이 즉시 반영됩니다.`,
+          bad: String.raw`
+import Button from '../../../packages/ui/src/Button.vue'      // 경로 지옥, 경계 없음
+`,
+          good: String.raw`
+# pnpm-workspace.yaml
+packages: ['apps/*', 'packages/*']
+
+# packages/ui/package.json
+{ "name": "@company/ui", "version": "0.0.0", "type": "module", "exports": { ".": "./src/index.ts", "./nuxt": "./nuxt.config.ts" }, "peerDependencies": { "vue": "^3.5" } }
+
+# apps/web/package.json
+{ "dependencies": { "@company/ui": "workspace:*", "@company/api-types": "workspace:*" } }
+
+// apps/web 에서
+import { Button } from '@company/ui'
+import type { Order } from '@company/api-types'
+// Nuxt 앱이 소스(.ts/.vue) 그대로 import 하려면 nuxt.config: build.transpile: ['@company/ui'] 또는 레이어로 extends
+`,
+        },
+        {
+          id: 'l3', short: `경계`,
+          title: `앱은 패키지를 import 하고, 패키지는 앱을 모른다. 앱끼리도 import 하지 않는다`,
+          why: `admin 이 web 의 컴포넌트를 import 하기 시작하면 web 의 리팩터링이 admin 을 깨고, 빌드가 서로 얽힙니다. 공유할 게 생기면 패키지로 내립니다. 패키지가 앱을 알면(useAuthStore 를 import) 그 패키지는 다른 앱에서 못 씁니다.`,
+          bad: String.raw`
+// apps/admin/pages/orders.vue
+import OrderStatusBadge from '../../web/components/OrderStatusBadge.vue'   // 앱 → 앱
+// packages/ui/src/UserMenu.vue
+import { useAuthStore } from '../../../apps/web/stores/auth'              // 패키지 → 앱
+`,
+          good: String.raw`
+// 공유 컴포넌트는 packages/ui 로 내리고, 앱 의존(인증·라우터) 은 props/slots/emit 으로 받는다
+// packages/ui/src/UserMenu.vue
+defineProps<{ user: { name: string; avatar?: string } | null }>()
+defineEmits<{ logout: [] }>()
+// apps/web: <UserMenu :user="auth.user" @logout="auth.logout()" />
+
+// 경계를 린트로 강제 (eslint-plugin-import 또는 boundaries)
+'import/no-restricted-paths': ['error', { zones: [
+  { target: './packages', from: './apps', message: '패키지는 앱을 import 할 수 없습니다' },
+  { target: './apps/web', from: './apps/admin' }, { target: './apps/admin', from: './apps/web' }
+] }]
+// dependency-cruiser 로 순환 의존(A→B→A) 도 CI 에서 실패시킨다
+`,
+        },
+        {
+          id: 'l4', short: `버전 한 곳`,
+          title: `vue·nuxt·typescript 버전은 catalog 로 한 곳에서 고정한다`,
+          why: `패키지마다 vue 버전이 다르면 두 벌이 설치되고 "컴포넌트가 다른 Vue 인스턴스" 류의 괴상한 버그가 납니다. pnpm catalog(또는 syncpack) 로 핵심 의존성을 한 곳에 적고 모두가 참조하면 업그레이드도 한 줄입니다.`,
+          bad: String.raw`
+# apps/web: "vue": "^3.4.21"   packages/ui: "vue": "^3.5.0"   apps/admin: "vue": "3.3.4"
+# → node_modules 에 vue 가 셋. inject/provide, Pinia 가 서로를 못 본다
+`,
+          good: String.raw`
+# pnpm-workspace.yaml
+packages: ['apps/*', 'packages/*']
+catalog:
+  vue: ^3.5.13
+  nuxt: ^3.16.0
+  typescript: ^5.7.0
+  '@vueuse/core': ^12.0.0
+
+# 각 package.json
+"dependencies": { "vue": "catalog:", "@vueuse/core": "catalog:" }
+
+# 점검: pnpm ls vue --depth 0 -r  → 모두 같은 버전인지
+# 공유 패키지의 vue 는 dependencies 가 아니라 peerDependencies (02번): 앱의 vue 하나만 설치되게
+`,
+        },
+        {
+          id: 'l5', short: `설정 공유`,
+          title: `tsconfig, eslint, tailwind 프리셋은 config 패키지에서 상속한다`,
+          why: `앱마다 tsconfig 를 복사하면 strict 옵션이 한 곳만 꺼진 채 몇 달이 갑니다. 기본 설정을 패키지로 두고 extends 하면 규칙이 하나이고, 바꾸면 전부에 적용됩니다. Nuxt 는 .nuxt/tsconfig.json 을 생성하므로 그 위에 얹습니다.`,
+          bad: String.raw`
+# apps/web/tsconfig.json, apps/admin/tsconfig.json, packages/ui/tsconfig.json — 각자 복사, 각자 다르게 수정됨
+`,
+          good: String.raw`
+# packages/config/tsconfig.base.json
+{ "compilerOptions": { "strict": true, "noUncheckedIndexedAccess": true, "verbatimModuleSyntax": true, "moduleResolution": "bundler", "target": "ES2022" } }
+# apps/web/tsconfig.json  (Nuxt 가 만든 것을 먼저, 공용은 그 위에)
+{ "extends": ["./.nuxt/tsconfig.json", "@company/config/tsconfig.base.json"] }
+# packages/ui/tsconfig.json
+{ "extends": "@company/config/tsconfig.base.json", "include": ["src"] }
+
+// packages/config/eslint.js — @nuxt/eslint-config 또는 antfu 프리셋 + 회사 규칙. 각 앱의 eslint.config.js 는 import 해서 export
+// packages/config/tailwind.preset.js — 색·폰트 토큰. 각 앱 tailwind.config: presets: [preset], content 에 '../../packages/ui/src/**/*.vue' 포함 (안 하면 ui 의 클래스가 purge 된다)
+`,
+        },
+        {
+          id: 'l6', short: `UI 패키지`,
+          title: `공용 UI 는 소스 그대로 쓰는 레이어이거나, 빌드된 라이브러리이거나 둘 중 하나로 정한다`,
+          why: `Nuxt 앱들만 쓰면 레이어가 가장 간단합니다(빌드 없음, auto-import). Vue 단독 앱이나 외부 배포가 있으면 vite 라이브러리 모드로 빌드해 dist 를 내보냅니다. 둘을 섞으면 "어느 쪽 코드가 실행되는지" 로 헷갈립니다.`,
+          bad: String.raw`
+// packages/ui 가 src 도 export 하고 dist 도 export 하고, 어떤 앱은 src 를, 어떤 앱은 dist 를 import
+// → HMR 이 안 되거나, 빌드된 쪽만 버그가 고쳐지지 않거나
+`,
+          good: String.raw`
+// 선택 A: Nuxt 레이어 (Nuxt 앱만 쓴다)
+// packages/ui/nuxt.config.ts
+export default defineNuxtConfig({ components: [{ path: './components', prefix: 'Ui' }], css: ['./assets/tokens.css'] })
+// apps/web/nuxt.config.ts: extends: ['@company/ui']   → <UiButton /> 자동 import, 빌드 없음, HMR 됨
+
+// 선택 B: 라이브러리 (Vue 앱·외부 배포도 쓴다)
+// packages/ui/vite.config.ts
+export default defineConfig({ plugins: [vue()], build: { lib: { entry: 'src/index.ts', formats: ['es'] }, rollupOptions: { external: ['vue'] } } })
+// package.json exports: { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } }, vite-plugin-dts 로 타입
+// 개발 중 HMR: 앱 vite.config 의 resolve.alias 로 '@company/ui' → src (dev 에서만), 또는 turbo dev 로 watch 빌드
+`,
+        },
+        {
+          id: 'l7', short: `타입 공유`,
+          title: `API 응답 타입과 검증 스키마는 서버와 앱이 같은 패키지에서 가져온다`,
+          why: `서버가 필드 이름을 바꿨는데 앱의 types/api.ts 는 그대로면 런타임에만 터집니다. zod 스키마를 패키지에 두고 서버는 parse, 앱은 z.infer 로 타입을 쓰면 바꾸는 순간 양쪽 컴파일이 깨져 알게 됩니다. Nuxt 의 server/ 와 같은 앱이면 shared/ 폴더(Nuxt 4) 가 이 역할입니다.`,
+          bad: String.raw`
+// server: return { id, totalAmount }       // 이름을 amount → totalAmount 로 변경
+// apps/web/types/api.ts: interface Order { id: string; amount: number }   // 그대로. order.amount 는 undefined
+`,
+          good: String.raw`
+// packages/api-types/src/order.ts
+export const OrderSchema = z.object({ id: z.string(), amount: z.number().int(), status: z.enum(['PENDING', 'PAID', 'SHIPPED']), createdAt: z.string().datetime() })
+export type Order = z.infer<typeof OrderSchema>
+export const CreateOrderInput = z.object({ ... })
+
+// 서버 (apps/api 또는 apps/web/server): 응답을 만들 때 타입으로 강제
+export default defineEventHandler(async (event): Promise<Order> => { ... })
+// 앱: useFetch<Order>('/api/orders/' + id)  — 필드가 바뀌면 여기서 컴파일 오류
+
+// 서버가 별도 언어(Java/Go)면: OpenAPI 스펙 → openapi-typescript 로 타입 생성을 패키지에 두고 CI 에서 스펙 변경 시 재생성
+// Nuxt 4 단일 앱: shared/ 폴더가 서버·클라이언트 양쪽 auto-import (파인코드 20회차)
+`,
+        },
+        {
+          id: 'l8', short: `태스크와 캐시`,
+          title: `빌드·린트·테스트는 turbo 가 의존 순서로 돌리고 결과를 캐시한다`,
+          why: `패키지 8개를 손으로 순서 맞춰 빌드하면 틀리고 느립니다. turbo(또는 nx) 가 package.json 의 의존 관계로 순서를 정하고, 입력이 같으면 캐시된 결과를 씁니다. CI 에서 바뀌지 않은 패키지의 테스트는 0초입니다.`,
+          bad: String.raw`
+# package.json
+"build": "pnpm -r run build"      # 순서가 알파벳. ui 보다 web 이 먼저 빌드되면 실패. 매번 전부
+`,
+          good: String.raw`
+# turbo.json
+{
+  "tasks": {
+    "build": { "dependsOn": ["^build"], "outputs": [".output/**", "dist/**", ".nuxt/**"] },   # ^build: 의존 패키지 먼저
+    "lint": { "dependsOn": ["^build"] },
+    "typecheck": { "dependsOn": ["^build"] },
+    "test": { "dependsOn": ["build"], "outputs": ["coverage/**"] },
+    "dev": { "cache": false, "persistent": true }
+  }
+}
+# 루트 package.json: "build": "turbo run build", "dev": "turbo run dev --filter=web..."   (web 과 그 의존만)
+# CI: turbo run build lint typecheck test --filter=...[origin/main]   # main 이후 바뀐 패키지와 그 의존자만 (10번)
+# 원격 캐시(Vercel Remote Cache / 자체 S3) 를 켜면 동료가 빌드한 결과를 CI 가 재사용
+`,
+        },
+        {
+          id: 'l9', short: `개발 환경`,
+          title: `루트에서 명령 하나로 전부 뜨고, 앱별 .env 는 앱 폴더에 둔다`,
+          why: `"web 띄우고, admin 띄우고, ui 는 watch 빌드" 를 README 로 설명하면 아무도 안 합니다. 루트의 pnpm dev 가 필요한 것을 다 띄우고, 포트가 겹치지 않게 고정합니다. 환경변수는 앱마다 다르니 각 앱 폴더의 .env 이고, 루트 .env 는 공통만.`,
+          bad: String.raw`
+# README: "터미널 3개를 열어서 각각 cd 한 뒤 npm run dev 를 치세요. ui 를 고치면 admin 에서 안 보이니 재시작하세요"
+`,
+          good: String.raw`
+# 루트 package.json
+"dev": "turbo run dev --parallel", "dev:web": "turbo run dev --filter=web...", "dev:admin": "turbo run dev --filter=admin..."
+# apps/web/package.json: "dev": "nuxi dev --port 3000"      apps/admin: "--port 3001"      packages/ui (라이브러리면): "dev": "vite build --watch"
+# 레이어 방식(06번 A) 이면 ui 는 dev 가 필요 없다 — 앱이 소스를 직접 본다
+
+# 환경변수
+# .env              공통 (DATABASE_URL 같은 로컬 개발 DB)
+# apps/web/.env     NUXT_PUBLIC_SITE_URL=http://localhost:3000, 결제 테스트 키
+# apps/admin/.env   NUXT_PUBLIC_SITE_URL=http://localhost:3001
+# .env.example 들만 커밋. 처음 받은 사람: pnpm install && pnpm setup:env (example 복사 스크립트) && pnpm dev
+
+# 루트 README 에 "5분 안에 띄우기" 섹션. 안 되는 순간 README 를 고친다
+`,
+        },
+        {
+          id: 'l10', short: `변경 영향`,
+          title: `CI 와 배포는 바뀐 패키지와 그 의존자만 돌린다`,
+          why: `ui 의 버튼 색을 바꿨는데 모바일웹까지 전부 빌드·테스트·배포하면 PR 하나에 40분입니다. turbo --filter=...[origin/main] 으로 영향 범위를 계산하고, 배포도 영향받은 앱만. 반대로 공용 패키지가 바뀌면 그걸 쓰는 앱 전부가 돌아야 합니다.`,
+          bad: String.raw`
+# .github/workflows/ci.yml
+- run: pnpm -r build && pnpm -r test       # 매 PR 전부. admin 한 줄 고쳐도 web E2E 20분
+`,
+          good: String.raw`
+# ci.yml
+- uses: actions/checkout@v4
+  with: { fetch-depth: 0 }                                  # main 과 비교하려면 히스토리 필요
+- run: pnpm install --frozen-lockfile
+- run: pnpm turbo run lint typecheck test build --filter=...[origin/main]   # 바뀐 것 + 그 의존자만. ui 가 바뀌면 web·admin 도 포함
+- run: pnpm turbo run e2e --filter=...[origin/main] --filter=./apps/*       # E2E 는 앱만
+
+# 배포: 앱별 워크플로에 paths 필터 또는 turbo-ignore
+#   apps/web 배포 → npx turbo-ignore web  (web 과 의존 패키지에 변경 없으면 배포 스킵. Vercel 의 "Ignored Build Step" 에 넣는다)
+# 규칙: packages/config 처럼 전부에 영향 주는 패키지는 어차피 전체가 돈다 → 자주 안 바뀌게 설계
+`,
+        },
+      ],
+    },
+    {
+      id: 'vue-30', no: 30, name: `면접 단골 질문`,
+      lead: `면접에서 자주 나오는 질문과, 흔한 얕은 답(나쁨) 과 깊은 답(좋음) 입니다. 답을 외우기보다 왜 그런지 코드로 설명할 수 있으면 됩니다. 각 항목의 번호는 이 스터디의 해당 회차입니다.`,
+      lessons: [
+        {
+          id: 'l1', short: `ref vs reactive`,
+          title: `"ref 는 원시값, reactive 는 객체" 에서 끝나면 얕은 답이다`,
+          why: `차이의 핵심은 "재할당과 구조 분해" 입니다. reactive 는 통째로 바꾸거나 구조 분해하면 반응성이 끊기고, ref 는 .value 로 재할당해도 연결이 유지됩니다. 그래서 기본은 ref, 묶음 상태만 reactive 라고 답할 수 있어야 합니다.`,
+          badLabel: '얕은 답', goodLabel: '깊은 답',
+          bad: String.raw`
+"ref 는 숫자·문자열 같은 원시값에 쓰고, reactive 는 객체에 씁니다.
+ ref 는 .value 를 붙여야 해서 불편합니다."
+`,
+          good: String.raw`
+"둘 다 Proxy 기반이고 ref 는 { value } 객체를 reactive 로 감싼 것입니다. 차이는 사용법에서 납니다.
+ 1) 재할당: reactive 는 state = {...} 로 바꾸면 연결이 끊기지만 ref 는 ref.value = {...} 가 됩니다.
+ 2) 구조 분해: const { a } = reactiveObj 는 반응성을 잃고 (toRefs 필요), ref 는 변수 자체가 반응형 컨테이너입니다.
+ 3) 템플릿에서는 ref 가 자동으로 언래핑되고, reactive 안의 ref 도 언래핑됩니다.
+ 그래서 기본은 ref 로 쓰고, 폼처럼 항상 묶어 다니는 상태만 reactive 로 씁니다. (3회차 01번)"
+
+const count = ref(0); count.value++                       // 유지
+const form = reactive({ name: '' }); form = reactive({})  // 끊김 (재할당 불가)
+const { name } = form                                     // 끊김 → const { name } = toRefs(form)
+`,
+        },
+        {
+          id: 'l2', short: `computed vs watch`,
+          title: `"둘 다 값 변화를 감지한다" 가 아니라 "파생값이냐 부수효과냐" 로 답한다`,
+          why: `computed 는 다른 값에서 만들어지는 값이고 캐시되며 동기입니다. watch 는 값이 바뀔 때 무언가를 하는 것(요청, 저장, 로그) 입니다. watch 로 다른 ref 를 계산해 넣는 코드는 거의 항상 computed 로 바꿀 수 있습니다.`,
+          badLabel: '얕은 답', goodLabel: '깊은 답',
+          bad: String.raw`
+"computed 는 캐시가 되고 watch 는 안 됩니다. watch 는 비동기가 되고 computed 는 안 됩니다."
+`,
+          good: String.raw`
+"computed 는 '값' 입니다. 의존한 것이 바뀌면 다음에 읽을 때 다시 계산되고, 안 읽으면 계산도 안 합니다(lazy + 캐시). 순수해야 하고 부수효과가 없어야 합니다.
+ watch 는 '반응' 입니다. 특정 소스가 바뀌면 콜백을 실행하고, 거기서 API 호출·저장·라우팅 같은 부수효과를 합니다.
+ 그래서 '값에서 값' 은 computed, '값이 바뀌면 무언가 한다' 는 watch 입니다.
+ watchEffect 는 소스를 자동 추적하지만 무엇에 반응하는지 안 보여 디버깅이 어려우니 간단한 동기화에만 씁니다. (3회차 03·04번)"
+
+// ✗ watch 로 파생값
+watch([price, qty], () => { total.value = price.value * qty.value })
+// ✓
+const total = computed(() => price.value * qty.value)
+// ✓ 부수효과는 watch
+watch(query, (q) => fetchResults(q), { immediate: true })
+`,
+        },
+        {
+          id: 'l3', short: `v-if vs v-show`,
+          title: `토글 빈도와 초기 비용, 그리고 SSR·접근성까지 말한다`,
+          why: `v-if 는 DOM 과 컴포넌트를 만들고 없애고, v-show 는 display 만 바꿉니다. 자주 토글하면 v-show, 드물거나 무거우면 v-if. 여기에 v-if 는 지연 로딩이 되고, v-show 는 숨겨도 DOM 에 있어 탭 포커스와 스크린리더에 걸린다는 점까지.`,
+          badLabel: '얕은 답', goodLabel: '깊은 답',
+          bad: String.raw`
+"v-if 는 조건이 false 면 렌더링을 안 하고 v-show 는 display: none 입니다."
+`,
+          good: String.raw`
+"v-if 는 조건이 거짓이면 요소와 자식 컴포넌트를 아예 만들지 않고, 참이 되면 생성(마운트) 합니다. 토글마다 생성·파괴 비용이 들지만 초기에 안 보이는 건 비용이 0 이고, 자식의 setup/onMounted 가 그때 돕니다.
+ v-show 는 항상 렌더링하고 CSS display 만 바꿉니다. 초기 비용은 있지만 토글은 거의 공짜입니다.
+ 그래서 자주 켜고 끄는 것(탭, 드롭다운) 은 v-show, 드물게 보이거나 무거운 것(모달, 큰 폼) 은 v-if 입니다.
+ 주의점: v-show 로 숨긴 요소는 DOM 에 있어 Tab 키로 포커스가 가고 스크린리더가 읽을 수 있으니 inert 나 aria-hidden 을 같이 써야 합니다. v-show 는 <template> 에 못 쓰고, v-else 가 없습니다. (1회차, 22회차)"
+`,
+        },
+        {
+          id: 'l4', short: `key 의 역할`,
+          title: `"목록에 key 를 써야 한다" 가 아니라 패치 알고리즘과 상태 유지를 설명한다`,
+          why: `key 는 가상 DOM 이 "같은 노드" 를 판단하는 기준입니다. 없거나 index 면 순서가 바뀔 때 노드를 재사용해 입력값·애니메이션·자식 상태가 엉뚱한 행에 남습니다. 반대로 key 를 바꿔 강제로 다시 만드는 용법도 있습니다.`,
+          badLabel: '얕은 답', goodLabel: '깊은 답',
+          bad: String.raw`
+"v-for 에는 key 를 꼭 써야 합니다. 경고가 나옵니다. index 를 쓰면 됩니다."
+`,
+          good: String.raw`
+"Vue 는 리스트를 다시 그릴 때 key 로 이전 노드와 새 노드를 짝지어 최소한의 DOM 변경을 합니다.
+ key 가 index 면 맨 앞에 항목을 넣었을 때 '0번 노드' 가 그대로 재사용되고 내용만 바뀌어, 그 행의 <input> 입력값·체크 상태·transition·자식 컴포넌트 state 가 엉뚱한 항목에 남습니다.
+ 고유 id 를 key 로 쓰면 노드가 항목을 따라 이동합니다.
+ 반대로 같은 자리의 컴포넌트를 강제로 새로 만들고 싶을 때 :key='route.params.id' 처럼 key 를 바꾸는 용법도 있습니다. 라우트 파라미터만 바뀔 때 setup 을 다시 돌리는 경우입니다. (1회차 04번)"
+
+<li v-for="item in items" :key="item.id">          // ✓
+<li v-for="(item, i) in items" :key="i">           // ✗ 정렬·삽입·삭제가 있는 목록
+<UserProfile :key="route.params.id" />             // 강제 재생성
+`,
+        },
+        {
+          id: 'l5', short: `nextTick`,
+          title: `"DOM 업데이트 후 실행" 에 더해 "왜 비동기로 묶는지" 를 말한다`,
+          why: `Vue 는 상태 변경을 모아 다음 마이크로태스크에 한 번만 렌더링합니다. 그래서 count.value++ 직후 DOM 은 아직 옛 값입니다. nextTick 은 그 렌더링 뒤를 기다리는 Promise 입니다. 쓸 일은 DOM 을 재거나 포커스할 때뿐이고, 상태만 바꾸는 코드에는 필요 없습니다.`,
+          badLabel: '얕은 답', goodLabel: '깊은 답',
+          bad: String.raw`
+"nextTick 은 DOM 이 바뀐 뒤 실행되는 콜백입니다. setTimeout 0 과 비슷합니다."
+`,
+          good: String.raw`
+"반응형 값을 바꾸면 Vue 는 바로 DOM 을 고치지 않고 '이 컴포넌트는 다시 그려야 함' 을 큐에 넣고, 현재 동기 코드가 끝난 뒤 마이크로태스크에서 한 번에 처리합니다. 한 핸들러에서 값을 10번 바꿔도 렌더는 1번입니다.
+ 그래서 값을 바꾼 직후 DOM 을 읽으면 옛 상태입니다. await nextTick() 은 그 플러시가 끝난 시점을 기다립니다.
+ 필요한 경우는 'DOM 을 읽거나 조작할 때' 뿐입니다: v-if 로 나타난 input 에 포커스, 목록 추가 후 scrollHeight 측정. 상태만 바꾸고 끝나는 코드에 nextTick 을 넣는 건 뭔가 다른 문제를 덮는 것입니다. (3회차 06번)"
+
+show.value = true
+await nextTick()
+inputRef.value?.focus()        // 이제 input 이 DOM 에 있다
+`,
+        },
+        {
+          id: 'l6', short: `하이드레이션`,
+          title: `SSR 하이드레이션이 무엇이고, mismatch 가 왜 나는지 설명한다`,
+          why: `서버가 HTML 을 보내고 브라우저에서 Vue 가 그 DOM 에 이벤트와 상태를 붙이는 과정이 하이드레이션입니다. 서버와 클라이언트가 다른 것을 그리면(시간, 랜덤, window 의존, localStorage) 경고가 나고 DOM 이 다시 그려집니다. 원인별 처방을 말할 수 있어야 합니다.`,
+          badLabel: '얕은 답', goodLabel: '깊은 답',
+          bad: String.raw`
+"SSR 은 서버에서 HTML 을 만들어 주는 거고, 하이드레이션은 그걸 클라이언트에서 다시 렌더링하는 겁니다. mismatch 는 가끔 나는데 ClientOnly 로 감싸면 됩니다."
+`,
+          good: String.raw`
+"서버가 렌더링한 HTML 을 브라우저가 먼저 보여 주고, JS 가 로드되면 Vue 가 같은 컴포넌트 트리를 만들어 기존 DOM 노드에 '붙입니다'. 새로 그리는 게 아니라 노드를 재사용하며 이벤트 리스너와 반응성을 연결하는 것이라 빠릅니다.
+ mismatch 는 서버의 렌더 결과와 클라이언트의 첫 렌더가 다를 때입니다. 흔한 원인:
+ - 시간·랜덤: new Date(), Math.random() → 서버 값과 다름. 서버에서 정한 값을 payload 로 넘기거나 클라이언트에서만 계산
+ - 브라우저 전용 상태: localStorage, window.innerWidth → 서버에는 없음. onMounted 에서 읽거나 <ClientOnly>
+ - 잘못된 HTML: <p> 안에 <div>, <table> 에 <tr> 직접 → 브라우저가 구조를 고쳐 버림
+ - 사용자별 상태를 전역 변수에 둠 → 서버에서 요청 간 공유 (useState 사용)
+ ClientOnly 는 최후의 수단입니다. 그 부분은 SSR 이점(첫 화면, SEO) 을 잃습니다. (8회차, 15회차)"
+`,
+        },
+        {
+          id: 'l7', short: `컴포저블 vs 믹스인`,
+          title: `Composition API 가 Options/믹스인보다 나은 이유를 "출처 추적" 으로 설명한다`,
+          why: `믹스인은 어디서 온 속성인지 안 보이고 이름이 충돌하며 타입이 안 잡힙니다. 컴포저블은 보통 함수라 import 와 반환값이 명시적이고, 인자로 조합되고, 타입이 따라옵니다. "코드를 기능별로 모은다" 는 결과이고 핵심은 명시성입니다.`,
+          badLabel: '얕은 답', goodLabel: '깊은 답',
+          bad: String.raw`
+"Composition API 는 setup 안에 코드를 쓰는 새로운 방식이고 믹스인 대신 컴포저블을 씁니다. 코드가 더 짧습니다."
+`,
+          good: String.raw`
+"믹스인의 문제는 세 가지입니다. 1) 컴포넌트에서 this.foo 가 어느 믹스인에서 왔는지 안 보입니다. 2) 두 믹스인이 같은 이름을 쓰면 조용히 덮어씁니다. 3) 믹스인에 인자를 넘길 수 없어 재사용이 제한되고 타입 추론이 안 됩니다.
+ 컴포저블은 그냥 함수입니다. const { x, y } = useMouse() 처럼 어디서 왔고 무엇을 돌려주는지 보이고, 이름은 구조 분해에서 바꾸면 되고, 인자로 설정을 받고, 반환 타입이 추론됩니다. 안에서 ref·computed·watch·생명주기를 쓰므로 컴포넌트 로직을 통째로 추출할 수 있습니다.
+ 주의할 점은 컴포저블 안의 생명주기 훅은 setup 동기 실행 중에 불려야 한다는 것과, 모듈 전역 상태는 SSR 에서 요청 간 공유된다는 것입니다. (4회차)"
+
+export function useMouse(target: MaybeRef<HTMLElement | null> = null) {
+  const x = ref(0), y = ref(0)
+  useEventListener(target ?? window, 'mousemove', (e) => { x.value = e.clientX; y.value = e.clientY })
+  return { x, y }
+}
+`,
+        },
+        {
+          id: 'l8', short: `Pinia vs provide/inject`,
+          title: `상태를 어디에 둘지 "범위와 수명" 으로 판단한다고 답한다`,
+          why: `모든 것을 Pinia 에 넣으면 전역 변수 더미가 되고, 모든 것을 props 로 내리면 5단계 드릴링이 됩니다. 컴포넌트 안에서 끝나면 ref, 한 서브트리가 공유하면 provide/inject, 앱 전체가 공유하고 페이지를 넘어 살면 Pinia, 서버에서 온 데이터는 useFetch 캐시.`,
+          badLabel: '얕은 답', goodLabel: '깊은 답',
+          bad: String.raw`
+"전역 상태는 Pinia 에 넣고, 컴포넌트 간 공유는 provide/inject 를 씁니다. Vuex 보다 Pinia 가 간단합니다."
+`,
+          good: String.raw`
+"상태를 두는 위치는 '누가 쓰는가, 얼마나 사는가' 로 정합니다.
+ - 컴포넌트 하나: ref. 끝.
+ - 부모-자식 1단계: props down, emit up. v-model 로 양방향.
+ - 한 서브트리(폼과 그 필드들, 탭과 패널): provide/inject. 트리 밖에서는 안 보이는 것이 장점이고, 라이브러리 컴포넌트가 주로 이 방식입니다.
+ - 앱 전체 + 페이지를 넘어 유지(로그인 사용자, 장바구니, 설정): Pinia. 데브툴, SSR 직렬화, 플러그인이 있습니다.
+ - 서버에서 받은 데이터: Pinia 에 복사하지 않고 useFetch/useAsyncData 키 캐시로. 스토어에 넣는 순간 '언제 갱신하나' 문제가 생깁니다.
+ - 컴포저블 모듈 전역 ref: 클라이언트 전용 앱이면 가벼운 전역 상태로 괜찮지만, SSR 에서는 요청 간 공유되므로 useState/Pinia 로. (6회차, 8회차)"
+`,
+        },
+        {
+          id: 'l9', short: `useFetch vs $fetch`,
+          title: `"useFetch 는 컴포저블, $fetch 는 함수" 가 아니라 SSR 과 중복 요청을 말한다`,
+          why: `차이는 SSR 에서 드러납니다. useFetch 는 서버에서 받은 결과를 payload 에 실어 클라이언트가 다시 요청하지 않고, 키로 캐시·중복 제거하며, 반응형 상태(data/status/error) 를 줍니다. $fetch 는 그냥 요청이라 setup 에서 쓰면 서버·클라이언트 두 번 요청합니다. 이벤트 핸들러 안에서는 $fetch 가 맞습니다.`,
+          badLabel: '얕은 답', goodLabel: '깊은 답',
+          bad: String.raw`
+"useFetch 는 Nuxt 의 컴포저블이고 $fetch 는 ofetch 입니다. 둘 다 API 를 부릅니다. useFetch 가 편해서 그걸 씁니다."
+`,
+          good: String.raw`
+"useFetch(= useAsyncData + $fetch) 는 setup 에서 '페이지 데이터' 를 받을 때 씁니다. SSR 중 서버에서 한 번 받고 결과를 payload 로 보내 클라이언트는 재요청 없이 하이드레이션합니다. 같은 키는 한 번만 요청하고, data·status·error·refresh 를 반응형으로 주며, query 가 ref 면 바뀔 때 다시 받습니다.
+ $fetch 는 단순 요청 함수입니다. setup 최상위에서 await $fetch 를 하면 서버에서 한 번, 클라이언트 하이드레이션 때 또 한 번 요청하고 결과가 payload 에 없어 깜빡입니다.
+ 그래서 '페이지가 그려지려면 필요한 데이터' 는 useFetch, '클릭해서 보내는 요청(저장, 삭제, 검색 버튼)' 은 $fetch 입니다. 둘 다 플러그인에서 만든 $api 인스턴스(인터셉터 포함) 를 거치게 합니다. (7회차, 8회차)"
+
+const { data } = await useFetch('/api/products', { query: { page } })    // 페이지 데이터
+async function remove(id) { await $api('/api/products/' + id, { method: 'DELETE' }); refresh() }   // 액션
+`,
+        },
+        {
+          id: 'l10', short: `렌더링 최적화`,
+          title: `"가상 DOM 이 빠르다" 가 아니라 컴파일러가 무엇을 건너뛰는지 설명한다`,
+          why: `Vue 3 의 속도는 가상 DOM 자체가 아니라 컴파일 시점 최적화에서 옵니다. 정적 노드 호이스팅, 패치 플래그(어떤 속성만 바뀔 수 있는지), 블록 트리(동적 노드만 순회) 로 diff 범위를 줄입니다. 개발자가 할 일은 그걸 방해하지 않는 것(큰 컴포넌트 쪼개기, 인라인 객체 피하기) 과 v-memo·shallowRef 같은 도구를 아는 것입니다.`,
+          badLabel: '얕은 답', goodLabel: '깊은 답',
+          bad: String.raw`
+"Vue 는 가상 DOM 으로 바뀐 부분만 업데이트해서 빠릅니다. 성능이 느리면 v-once 나 keep-alive 를 씁니다."
+`,
+          good: String.raw`
+"Vue 3 템플릿 컴파일러가 세 가지를 합니다.
+ 1) 정적 호이스팅: 절대 안 바뀌는 노드(<div class='x'>제목</div>) 는 한 번만 만들어 재사용합니다.
+ 2) 패치 플래그: <div :class='c'> 는 'CLASS 만 바뀔 수 있음' 플래그가 붙어 diff 때 class 만 비교합니다.
+ 3) 블록 트리: 템플릿 구조가 안 바뀌는 영역은 동적 노드만 평평한 배열로 모아 두고 그것만 순회합니다. 트리 전체 diff 가 아닙니다.
+ 그래서 '템플릿 수준에서 바뀔 수 있는 것' 이 적을수록 빠릅니다. 개발자가 할 일은:
+ - 큰 컴포넌트를 쪼개 리렌더 단위를 줄인다 (부모가 그려져도 props 가 같은 자식은 안 그린다)
+ - 템플릿에 인라인 객체·배열·화살표 함수를 넣지 않는다 (매번 새 참조 → 항상 변경으로 간주)
+ - 큰 데이터는 shallowRef, 바뀌지 않는 긴 목록은 v-memo, 무거운 컴포넌트 전환은 KeepAlive
+ - 목록이 수천이면 가상 스크롤
+ 측정 없이 최적화하지 않습니다. Vue Devtools 의 컴포넌트 렌더 하이라이트와 Performance 탭으로 먼저 확인합니다. (10회차, 23회차, 26회차)
+ Vapor 모드(3.6+) 는 가상 DOM 없이 반응형 바인딩을 직접 DOM 에 연결하는 새 컴파일 전략으로, 같은 템플릿을 더 적은 메모리로 돌립니다."
+`,
+        },
+      ],
+    },
     // @@APPEND@@ 새 회차는 이 줄 위에 추가
   ],
   // 다음에 만들 묶음 예고. 없으면 null.
   upcoming: {
-    name: `201~300번 후보 주제`,
+    name: `301~400번 후보 주제`,
     items: [
-      `E2E 테스트 (Playwright)`,
-      `접근성 (a11y) 점검`,
-      `성능 측정과 Core Web Vitals`,
-      `실시간 (WebSocket, SSE)`,
-      `파일 업로드와 이미지 처리`,
-      `데이터 테이블과 페이지네이션 패턴`,
-      `에러 처리, 로깅, 모니터링`,
-      `보안 (CSP, XSS, 의존성 점검)`,
-      `모노레포와 패키지 구조`,
-      `면접 단골 질문`,
+      `Vue 3.6 Vapor 모드와 alien-signals`,
+      `디자인 토큰과 테마 시스템`,
+      `폼 라이브러리 비교 (VeeValidate, FormKit, Regle)`,
+      `상태 머신 (XState) 과 복잡한 UI 흐름`,
+      `컴포넌트 문서화 (Storybook, Histoire)`,
+      `단위 테스트 심화 (Vitest, Testing Library)`,
+      `Nuxt 서버 심화 (Nitro 스토리지, 태스크, 캐시)`,
+      `배포 전략 (Docker, 엣지, 프리뷰 환경)`,
+      `코드 리뷰 체크리스트`,
+      `레거시 코드 개선 전략`,
     ],
   },
 };
