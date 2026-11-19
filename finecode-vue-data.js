@@ -6625,22 +6625,2351 @@ async function remove(id) { await $api('/api/products/' + id, { method: 'DELETE'
         },
       ],
     },
+    {
+      id: 'vue-31', no: 31, name: `Vue 3.6 Vapor 모드와 alien-signals`,
+      lead: `3.6 에서 바뀐 두 가지를 습관으로 다룹니다. Vapor 는 가상 DOM 없이 템플릿을 직접 DOM 조작으로 컴파일하는 선택적 모드이고, 반응형 시스템은 alien-signals 알고리즘으로 다시 쓰였습니다. 어디에 먼저 쓰고, 무엇을 가정하지 말아야 하는지가 핵심입니다.`,
+      lessons: [
+        {
+          id: 'l1', short: `언제`,
+          title: `Vapor 는 기능이 아니라 컴파일 전략이다. 무거운 곳부터 작게 적용한다`,
+          why: `Vapor 로 바꿔도 화면은 똑같습니다. 얻는 건 메모리와 초기 렌더 시간입니다. "3.6 나왔으니 전부 전환" 은 서드파티 컴포넌트와 렌더 함수에서 막히고, 얻는 것도 측정하지 못합니다. 긴 목록, 임베드 위젯, 저사양 기기 화면처럼 이득이 보이는 곳부터 컴포넌트 단위로 켭니다.`,
+          bad: String.raw`
+# "전부 vapor 로" — 모든 .vue 에 vapor 붙이고 빌드/런타임 오류를 하나씩 끈다
+# 측정 없음, 서드파티 UI 라이브러리가 vdom 이라 결국 interop 범벅
+`,
+          good: String.raw`
+// 1) 측정부터: Performance 탭에서 렌더 시간, Memory 탭에서 heap (전환 전 숫자를 적어 둔다)
+// 2) 후보: 행 수천 개 테이블의 Row, 지도 위 마커 목록, 외부 사이트에 심는 위젯, 모바일 웹 홈
+// 3) 컴포넌트 하나만 vapor 로
+<script setup lang="ts" vapor>
+defineProps<{ row: Order }>()
+</script>
+<template>
+  <tr><td>{{ row.id }}</td><td>{{ row.total }}</td></tr>
+</template>
+// 4) 같은 측정 반복 → 이득이 있으면 다음 후보. 없으면 되돌린다 (1줄 지우면 끝)
+`,
+        },
+        {
+          id: 'l2', short: `선언`,
+          title: `앱 전체는 createVaporApp, 섞어 쓸 땐 createApp + vaporInteropPlugin`,
+          why: `Vapor 전용 앱은 vdom 런타임을 아예 싣지 않아 번들이 작습니다. 기존 앱은 vdom 이 루트이므로 interop 플러그인을 켜야 vapor 자식을 그릴 수 있습니다. 둘을 헷갈리면 "컴포넌트가 비어 보이는" 증상으로 나타납니다.`,
+          bad: String.raw`
+// 기존 createApp 앱에 vapor 컴포넌트를 넣었는데 플러그인 없음 → 렌더되지 않거나 경고
+import { createApp } from 'vue'
+createApp(App).mount('#app')
+`,
+          good: String.raw`
+// A. 새 앱·위젯: Vapor 만
+import { createVaporApp } from 'vue'
+import App from './App.vue'          // App 과 모든 자식이 <script setup vapor>
+createVaporApp(App).mount('#app')     // vdom 런타임 없음 → 번들 가장 작음
+
+// B. 기존 앱: vdom 루트 + vapor 일부
+import { createApp, vaporInteropPlugin } from 'vue'
+createApp(App).use(vaporInteropPlugin).mount('#app')
+// Nuxt: 모듈/실험 옵션으로 interop 을 켜는 방식은 버전마다 다르다 — nuxt.config 의 vue/experimental 항목을 릴리즈 노트에서 확인
+`,
+        },
+        {
+          id: 'l3', short: `경계`,
+          title: `vdom ↔ vapor 경계는 적게. 경계마다 변환 비용이 든다`,
+          why: `interop 은 vdom 부모가 vapor 자식을 감싸는 어댑터를 만듭니다. 목록 행 하나하나가 경계가 되면 vapor 의 이득이 어댑터 비용으로 사라집니다. 경계를 "서브트리 뿌리 하나" 에 두고 그 아래는 전부 vapor 로 만듭니다.`,
+          bad: String.raw`
+<!-- vdom 테이블 안에서 행마다 vapor 컴포넌트 → 행 1,000개 = 경계 1,000개 -->
+<table>
+  <OrderRowVapor v-for="o in orders" :key="o.id" :row="o" />
+</table>
+`,
+          good: String.raw`
+<!-- 경계는 OrdersTable 하나. 그 안의 Row, Cell, Badge 는 전부 vapor -->
+<OrdersTableVapor :orders="orders" />
+
+<!-- OrdersTableVapor.vue (vapor) -->
+<script setup lang="ts" vapor>
+import OrderRow from './OrderRow.vue'   // vapor
+defineProps<{ orders: Order[] }>()
+</script>
+<template>
+  <table><tbody><OrderRow v-for="o in orders" :key="o.id" :row="o" /></tbody></table>
+</template>
+`,
+        },
+        {
+          id: 'l4', short: `제약`,
+          title: `Vapor 컴포넌트는 템플릿만. 렌더 함수, JSX, Options API, mixins 는 못 쓴다`,
+          why: `Vapor 는 템플릿을 컴파일해서 DOM 명령으로 바꾸는 방식이라 h() 로 만든 VNode 가 없습니다. 렌더 함수가 필요한 컴포넌트(동적 컴포넌트 트리, 서드파티 headless UI 일부) 는 vdom 으로 남기고 경계 바깥에 둡니다. 지원 범위는 릴리즈마다 늘어나므로 막히면 먼저 릴리즈 노트를 봅니다.`,
+          bad: String.raw`
+<script lang="ts" vapor>
+import { h } from 'vue'
+export default { render() { return h('div', this.msg) } }   // 렌더 함수 + Options API — vapor 에서 불가
+</script>
+`,
+          good: String.raw`
+<script setup lang="ts" vapor>
+// 템플릿 + Composition API 만. 동적 컴포넌트는 <component :is> 로
+import { computed } from 'vue'
+const props = defineProps<{ kind: 'text' | 'image' }>()
+const Comp = computed(() => props.kind === 'image' ? ImageBlock : TextBlock)
+</script>
+<template><component :is="Comp" /></template>
+
+<!-- 렌더 함수가 필수인 것(서드파티 Table, 복잡한 headless) 은 vdom 컴포넌트로 두고 interop 경계 밖에서 사용 -->
+`,
+        },
+        {
+          id: 'l5', short: `반응형 엔진`,
+          title: `3.6 반응형은 alien-signals 기반이다. "값이 실제로 바뀌었나" 를 더 엄격히 본다`,
+          why: `새 알고리즘은 push(변경 알림)–pull(필요할 때 재계산) 방식이라 computed 는 의존성이 알림을 보내도 실제 값이 같으면 재계산을 멈춥니다. 덕분에 computed 체인이 길어도 끝까지 다시 도는 일이 줄었습니다. 그래서 "큰 computed 하나" 보다 "작은 computed 여러 개" 가 더 유리합니다.`,
+          bad: String.raw`
+// 하나의 거대한 computed: 어느 입력이 바뀌어도 전체 재계산
+const view = computed(() => ({
+  rows: filterAndSort(orders.value, filter.value, sort.value),
+  total: orders.value.reduce((s, o) => s + o.total, 0),
+  label: t('orders.count', { n: orders.value.length }),
+}))
+`,
+          good: String.raw`
+// 입력별로 쪼갠다. filter 만 바뀌면 total·label 은 값이 같아 하위 computed 가 재계산되지 않는다
+const filtered = computed(() => orders.value.filter(matches(filter.value)))
+const rows = computed(() => sortBy(filtered.value, sort.value))
+const total = computed(() => orders.value.reduce((s, o) => s + o.total, 0))
+const count = computed(() => orders.value.length)      // 숫자: 같은 값이면 label 도 안 돈다
+const label = computed(() => t('orders.count', { n: count.value }))
+`,
+        },
+        {
+          id: 'l6', short: `순수성`,
+          title: `computed 안에 부작용을 두지 않는다. 언제 몇 번 실행되는지는 엔진의 사정이다`,
+          why: `예전엔 "computed 는 의존성이 바뀌면 한 번 돈다" 는 암묵적 가정으로 로그를 찍거나 fetch 를 걸어 두는 코드가 돌아갔습니다. 새 엔진은 평가를 더 미루고 건너뛰므로 그런 코드는 "안 찍힘" 이나 "두 번 찍힘" 으로 깨집니다. 부작용은 watch/watchEffect 로, computed 는 값만.`,
+          bad: String.raw`
+const page = computed(() => {
+  console.log('page changed', route.query.page)     // 부작용
+  analytics.track('page_view')                       // 부작용
+  return Number(route.query.page ?? 1)
+})
+`,
+          good: String.raw`
+const page = computed(() => Number(route.query.page ?? 1))
+watch(page, (p) => analytics.track('page_view', { page: p }), { immediate: true })
+// 디버깅은 onTrack/onTrigger (dev 전용) 로
+const rows = computed(() => sortBy(list.value), { onTrigger: (e) => console.debug(e) })
+`,
+        },
+        {
+          id: 'l7', short: `실행 순서`,
+          title: `watch 와 effect 의 실행 순서에 의존하지 않는다. 순서가 필요하면 flush 를 명시한다`,
+          why: `엔진이 바뀌면서 같은 틱 안의 effect 실행 순서가 미세하게 달라질 수 있습니다. "A watch 가 B 보다 먼저 돈다" 에 기댄 코드는 3.5 에서 우연히 맞았을 뿐입니다. 순서가 필요하면 하나의 watch 로 합치거나, flush: 'sync' / 'post' 로 시점을 명시합니다.`,
+          bad: String.raw`
+watch(filter, () => { draft.value = buildDraft(filter.value) })   // 먼저 돌아야 한다고 가정
+watch(filter, () => { save(draft.value) })                        // 두 번째라고 가정 → 순서 보장 없음
+`,
+          good: String.raw`
+// 의존이 있으면 한 watch 로
+watch(filter, (f) => { draft.value = buildDraft(f); save(draft.value) })
+// DOM 이 갱신된 뒤여야 하면 post, 즉시 반응해야 하면 sync (비용 큼, 입력 검증 정도만)
+watch(items, () => scrollToBottom(), { flush: 'post' })
+`,
+        },
+        {
+          id: 'l8', short: `얕게`,
+          title: `큰 데이터는 Vapor 에서도 shallowRef. 깊은 프록시는 엔진과 무관하게 비싸다`,
+          why: `Vapor 가 줄이는 건 렌더 비용이지 반응형 추적 비용이 아닙니다. 행 10,000개를 reactive 로 감싸면 프록시 10,000개와 그 속 필드마다 의존성 그래프가 생깁니다. 교체 단위로만 반응하면 되는 데이터는 shallowRef 로 두고 통째로 바꿉니다(10회차 참고).`,
+          bad: String.raw`
+const rows = ref<Row[]>(await fetchRows())   // 깊은 반응형: 셀 하나하나 추적
+rows.value[1234].qty++                         // 동작은 하지만 전체가 프록시
+`,
+          good: String.raw`
+const rows = shallowRef<Row[]>(await fetchRows())
+function updateQty(id: string, qty: number) {
+  rows.value = rows.value.map(r => r.id === id ? { ...r, qty } : r)   // 교체 → 한 번 알림
+}
+// 자주 바뀌는 한 행만 따로 반응형이 필요하면 그 행만 ref 로 꺼낸다
+`,
+        },
+        {
+          id: 'l9', short: `정리`,
+          title: `effectScope 와 onScopeDispose 로 수명을 묶는다. Vapor 도 누수는 똑같이 난다`,
+          why: `컴포넌트 밖(스토어, 싱글턴 컴포저블) 에서 만든 watch 는 컴포넌트가 사라져도 남습니다. 새 엔진은 메모리를 덜 쓰지만, 참조가 살아 있으면 못 거둡니다. 범위를 만들고 끝날 때 stop() 하는 습관은 그대로입니다.`,
+          bad: String.raw`
+// stores/live.ts — 스토어 생성 시 watch 를 걸고 끝. 테스트마다, HMR 마다 쌓인다
+export const useLive = defineStore('live', () => {
+  const data = ref()
+  watch(socket.message, (m) => data.value = m)
+  return { data }
+})
+`,
+          good: String.raw`
+export function useLiveFeed() {
+  const scope = effectScope()
+  const data = shallowRef<Msg | null>(null)
+  scope.run(() => {
+    const off = socket.on('message', (m) => data.value = m)
+    onScopeDispose(off)
+  })
+  return { data, stop: () => scope.stop() }
+}
+// 컴포넌트에서: const feed = useLiveFeed(); onUnmounted(feed.stop)  (setup 안에서 호출했다면 자동)
+`,
+        },
+        {
+          id: 'l10', short: `업그레이드`,
+          title: `3.6 업그레이드는 반응형 변경만 먼저 받고, Vapor 는 별도 작업으로 뗀다`,
+          why: `버전만 올려도 반응형 엔진은 바뀝니다. 그 변화(실행 순서, 재계산 횟수) 로 깨지는 곳을 먼저 찾아 고정한 뒤 Vapor 를 시작해야 원인이 섞이지 않습니다. 업그레이드 PR 과 Vapor PR 을 나눕니다.`,
+          bad: String.raw`
+# 한 PR: vue 3.5 → 3.6 + 컴포넌트 30개 vapor 전환 + 깨진 테스트 수정
+# → 어떤 변화가 어떤 버그를 냈는지 모름
+`,
+          good: String.raw`
+# PR 1: 의존성만 올린다 (vue, @vue/compiler-sfc, vite-plugin-vue, nuxt). 테스트·E2E 통과. 배포 후 1주 관찰
+#   - 깨지면 대부분 computed 부작용(l6) 또는 watch 순서(l7) → 그 자리에서 고친다
+# PR 2: vapor 후보 1개 (l1) + 측정 수치 첨부
+# PR 3~: 서브트리 단위로 확장. 서드파티가 막으면 그 경계에서 멈춘다
+# 체크: pnpm ls vue -r 로 단일 버전 (29회차), 커스텀 디렉티브는 함수형으로 (vapor 는 객체 훅 미지원)
+`,
+        },
+      ],
+    },
+    {
+      id: 'vue-32', no: 32, name: `디자인 토큰과 테마 시스템`,
+      lead: `색·간격·글꼴·모션을 코드 안에 흩뿌리지 않고 이름을 붙여 한 곳에서 관리하는 습관입니다. 토큰을 세 층으로 나누고, CSS 변수로 내려보내고, 테마는 속성 하나로 바꿉니다.`,
+      lessons: [
+        {
+          id: 'l1', short: `3층`,
+          title: `원시 → 의미 → 컴포넌트 세 층으로 나누고, 컴포넌트는 의미 토큰만 쓴다`,
+          why: `blue-500 을 버튼에 직접 쓰면 "브랜드색 변경" 이 전체 검색이 됩니다. 버튼은 color-primary(의미) 를 쓰고, 의미 토큰이 원시값을 가리키게 하면 브랜드·다크·고대비 테마는 의미 토큰의 매핑만 바꾸면 됩니다.`,
+          bad: String.raw`
+<button class="bg-blue-500 text-white hover:bg-blue-600">저장</button>
+<p class="text-gray-700">본문</p>
+/* 다크 모드: 모든 파일에서 blue-500 → blue-400, gray-700 → gray-200 치환 */
+`,
+          good: String.raw`
+/* 1층 원시: 이름이 값 */
+:root { --blue-500: #2563eb; --blue-400: #60a5fa; --gray-700: #374151; --gray-200: #e5e7eb; }
+/* 2층 의미: 이름이 용도. 테마가 바꾸는 층 */
+:root { --color-primary: var(--blue-500); --color-text: var(--gray-700); --color-bg: #fff; }
+[data-theme="dark"] { --color-primary: var(--blue-400); --color-text: var(--gray-200); --color-bg: #0b0f19; }
+/* 3층 컴포넌트(선택): 컴포넌트가 의미를 어떻게 쓰는지 */
+.btn { --btn-bg: var(--color-primary); background: var(--btn-bg); }
+
+<button class="bg-primary text-on-primary">저장</button>   <!-- 의미 이름만 -->
+`,
+        },
+        {
+          id: 'l2', short: `CSS 변수`,
+          title: `테마 값은 JS 객체가 아니라 CSS 변수로 내려보낸다`,
+          why: `JS 테마 객체를 provide 하면 테마 전환 때 모든 컴포넌트가 리렌더되고, 스타일시트와 값이 두 벌이 됩니다. CSS 변수는 루트 속성 하나 바꾸면 브라우저가 다시 그리고, SSR HTML 에도 그대로 들어가 깜빡임이 없습니다.`,
+          bad: String.raw`
+const theme = reactive({ primary: '#2563eb', text: '#374151' })
+provide('theme', theme)
+// 모든 컴포넌트: const t = inject('theme'); :style="{ color: t.text }"  → 테마 전환 = 전체 리렌더
+`,
+          good: String.raw`
+/* assets/css/tokens.css — 한 번 로드 */
+:root { --color-primary: #2563eb; ... }
+[data-theme="dark"] { --color-primary: #60a5fa; ... }
+
+/* 컴포넌트는 변수만 참조. 리렌더 없음 */
+.card { background: var(--color-surface); color: var(--color-text); border-radius: var(--radius-md); }
+
+// JS 가 값을 알아야 할 때(차트 색) 만 읽는다
+const primary = getComputedStyle(document.documentElement).getPropertyValue('--color-primary').trim()
+`,
+        },
+        {
+          id: 'l3', short: `다크 모드`,
+          title: `시스템 설정을 기본으로 따르고, 사용자가 고르면 저장한다. 첫 화면 깜빡임을 막는다`,
+          why: `data-theme 을 onMounted 에서 붙이면 라이트로 그려진 뒤 다크로 바뀌는 깜빡임이 납니다. 저장값이 있으면 HTML 이 그려지기 전에 속성이 붙어야 합니다. Nuxt 는 @nuxtjs/color-mode 가 이 인라인 스크립트와 쿠키를 처리합니다.`,
+          bad: String.raw`
+onMounted(() => {
+  const saved = localStorage.getItem('theme')
+  document.documentElement.dataset.theme = saved ?? 'light'    // 이미 그려진 뒤 → 깜빡
+})
+`,
+          good: String.raw`
+// nuxt.config.ts
+modules: ['@nuxtjs/color-mode'],
+colorMode: { preference: 'system', fallback: 'light', dataValue: 'theme', storageKey: 'theme' }
+// → <html data-theme="dark"> 를 하이드레이션 전에 붙이는 스크립트를 넣어 준다
+
+// 토글
+const colorMode = useColorMode()
+const options = [['system', '시스템'], ['light', '라이트'], ['dark', '다크']] as const
+<select v-model="colorMode.preference"><option v-for="[v, l] in options" :key="v" :value="v">{{ l }}</option></select>
+
+/* CSS 는 속성만 본다. system 일 때는 라이브러리가 미디어 쿼리 결과를 속성으로 반영 */
+[data-theme="dark"] { ... }
+`,
+        },
+        {
+          id: 'l4', short: `색만이 아님`,
+          title: `간격, 둥글기, 글꼴 크기, 그림자, 모션, z-index 도 토큰이다`,
+          why: `색은 토큰으로 만들면서 margin: 13px, z-index: 9999, transition: .3s 는 여기저기 박힌 채로 두면 "조금씩 다른" UI 가 됩니다. 눈금(scale) 을 정해 두고 그 안에서만 고릅니다. 특히 z-index 는 층 이름으로 관리해야 모달 위에 토스트가 못 올라오는 사고가 없습니다.`,
+          bad: String.raw`
+.toast { z-index: 9999; margin-top: 13px; border-radius: 7px; transition: all .35s; }
+.modal { z-index: 10000; padding: 22px; border-radius: 6px; }
+.dropdown { z-index: 99999; }     /* 서로 이기려는 숫자 싸움 */
+`,
+          good: String.raw`
+:root {
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-6: 24px; --space-8: 32px;
+  --radius-sm: 4px; --radius-md: 8px; --radius-full: 9999px;
+  --text-sm: .875rem; --text-base: 1rem; --text-lg: 1.125rem;
+  --shadow-1: 0 1px 2px rgb(0 0 0 / .06); --shadow-2: 0 4px 12px rgb(0 0 0 / .1);
+  --motion-fast: 120ms; --motion-base: 200ms; --ease: cubic-bezier(.2, 0, 0, 1);
+  --z-dropdown: 100; --z-sticky: 200; --z-modal: 300; --z-toast: 400;   /* 층 이름 */
+}
+.toast { z-index: var(--z-toast); padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); transition: transform var(--motion-base) var(--ease); }
+`,
+        },
+        {
+          id: 'l5', short: `한 소스`,
+          title: `토큰 원본은 JSON 하나. CSS·TS·Tailwind 설정은 거기서 생성한다`,
+          why: `tokens.css 와 theme.ts 와 tailwind.config 에 같은 값을 세 번 적으면 한 군데가 어긋납니다. 디자이너가 Figma 에서 내보낸 JSON 을 원본으로 두고 빌드 때 세 파일을 생성하면 값은 하나입니다. Style Dictionary 가 표준이고, 작으면 스크립트 30줄로도 됩니다.`,
+          bad: String.raw`
+/* tokens.css */ --color-primary: #2563eb;
+/* theme.ts  */ export const primary = '#2563EB'
+/* tailwind  */ colors: { primary: '#2564eb' }      /* 오타, 아무도 모름 */
+`,
+          good: String.raw`
+// design/tokens.json (원본, Figma Tokens/Variables 내보내기 형식)
+{ "color": { "primary": { "value": "{blue.500}" }, "text": { "value": "{gray.700}" } }, "space": { "4": { "value": "16px" } } }
+
+// scripts/build-tokens.ts — style-dictionary
+import StyleDictionary from 'style-dictionary'
+await new StyleDictionary({
+  source: ['design/tokens.json', 'design/theme-dark.json'],
+  platforms: {
+    css: { transformGroup: 'css', buildPath: 'assets/css/', files: [{ destination: 'tokens.css', format: 'css/variables' }] },
+    ts:  { transformGroup: 'js',  buildPath: 'utils/',     files: [{ destination: 'tokens.ts', format: 'javascript/es6' }] },
+  },
+}).buildAllPlatforms()
+// package.json: "prebuild": "tsx scripts/build-tokens.ts", 생성 파일은 커밋하지 않거나 CI 에서 diff 검사
+`,
+        },
+        {
+          id: 'l6', short: `Tailwind v4`,
+          title: `Tailwind v4 는 @theme 으로 토큰을 선언하고, 의미 색은 CSS 변수를 가리키게 한다`,
+          why: `v4 는 설정 파일 대신 CSS 의 @theme 블록이 토큰 원본입니다. 원시 색은 @theme 에, 의미 색은 var() 로 연결하면 bg-primary 가 테마 속성에 따라 바뀌고 dark: 접두사를 모든 클래스에 붙이지 않아도 됩니다.`,
+          bad: String.raw`
+<!-- 모든 요소에 dark: 변형을 하나씩 -->
+<div class="bg-white text-gray-900 dark:bg-gray-900 dark:text-gray-100 border-gray-200 dark:border-gray-700">
+`,
+          good: String.raw`
+/* assets/css/main.css */
+@import "tailwindcss";
+@theme {
+  --color-blue-500: #2563eb; --color-blue-400: #60a5fa;
+  /* 의미 토큰은 변수를 가리킨다 → 유틸리티 이름은 bg-primary, text-fg, border-line */
+  --color-primary: var(--primary);
+  --color-fg: var(--fg);
+  --color-surface: var(--surface);
+  --color-line: var(--line);
+}
+:root { --primary: var(--color-blue-500); --fg: #111827; --surface: #fff; --line: #e5e7eb; }
+[data-theme="dark"] { --primary: var(--color-blue-400); --fg: #f3f4f6; --surface: #0b0f19; --line: #1f2937; }
+
+<div class="bg-surface text-fg border-line">   <!-- 테마는 속성이 결정 -->
+`,
+        },
+        {
+          id: 'l7', short: `변형`,
+          title: `컴포넌트 변형은 if-else 클래스 문자열이 아니라 variants 선언으로 만든다`,
+          why: `size × variant × state 를 삼항으로 이어 붙이면 조합이 늘수록 읽을 수 없고 빠진 조합이 생깁니다. cva / tailwind-variants 는 표로 선언하고 타입까지 뽑아 주며, 기본값과 복합 조건(compoundVariants) 도 한 곳에 있습니다.`,
+          bad: String.raw`
+const cls = computed(() =>
+  'btn ' + (props.variant === 'primary' ? 'bg-primary text-on-primary' : props.variant === 'danger' ? 'bg-danger text-white' : 'bg-surface border') +
+  (props.size === 'sm' ? ' h-8 px-3 text-sm' : props.size === 'lg' ? ' h-12 px-6' : ' h-10 px-4') +
+  (props.disabled ? ' opacity-50 pointer-events-none' : ''))
+`,
+          good: String.raw`
+// components/ui/button.ts
+import { tv, type VariantProps } from 'tailwind-variants'
+export const button = tv({
+  base: 'inline-flex items-center justify-center rounded-md font-medium transition-colors focus-visible:ring-2 disabled:opacity-50 disabled:pointer-events-none',
+  variants: {
+    variant: { primary: 'bg-primary text-on-primary hover:bg-primary-hover', danger: 'bg-danger text-white', ghost: 'bg-transparent hover:bg-surface-2' },
+    size: { sm: 'h-8 px-3 text-sm', md: 'h-10 px-4', lg: 'h-12 px-6 text-lg' },
+  },
+  compoundVariants: [{ variant: 'ghost', size: 'sm', class: 'px-2' }],
+  defaultVariants: { variant: 'primary', size: 'md' },
+})
+export type ButtonProps = VariantProps<typeof button>
+
+<!-- Button.vue -->
+<script setup lang="ts">
+const props = defineProps<{ variant?: ButtonProps['variant']; size?: ButtonProps['size'] }>()
+</script>
+<template><button :class="button({ variant, size })"><slot /></button></template>
+`,
+        },
+        {
+          id: 'l8', short: `전환`,
+          title: `테마를 바꾸는 순간엔 transition 을 끄고, 서버 렌더와 첫 화면이 같게 한다`,
+          why: `테마 전환 때 모든 요소의 color transition 이 제각각 돌아 얼룩처럼 보입니다. 바꾸는 동안만 전환을 끄면 한 번에 바뀝니다. 그리고 선택값은 쿠키에도 저장해야 SSR 이 같은 테마로 그려 하이드레이션 불일치가 없습니다.`,
+          bad: String.raw`
+* { transition: background-color .3s, color .3s; }     /* 테마 전환 때 요소마다 다른 타이밍 → 얼룩 */
+localStorage.setItem('theme', 'dark')                    /* 서버는 모른다 → SSR 은 light, 클라는 dark */
+`,
+          good: String.raw`
+// composables/useTheme.ts
+export function setTheme(next: 'light' | 'dark' | 'system') {
+  const root = document.documentElement
+  root.classList.add('no-transitions')
+  colorMode.preference = next                      // 쿠키 + 속성 (color-mode 모듈)
+  requestAnimationFrame(() => requestAnimationFrame(() => root.classList.remove('no-transitions')))
+}
+/* main.css */
+.no-transitions *, .no-transitions *::before, .no-transitions *::after { transition: none !important; }
+/* View Transitions API 를 쓰면 document.startViewTransition(() => setTheme(next)) 로 부드럽게 */
+`,
+        },
+        {
+          id: 'l9', short: `대비 쌍`,
+          title: `배경 토큰에는 짝이 되는 전경 토큰(on-*) 을 만들고 대비를 검사한다`,
+          why: `bg-primary 위에 text-white 를 손으로 고르면 테마가 바뀔 때 대비가 깨집니다. primary 와 on-primary 를 쌍으로 정의하면 테마는 쌍을 통째로 바꾸고, 토큰 빌드 때 WCAG 4.5:1 을 검사해 실패시킬 수 있습니다(22회차).`,
+          bad: String.raw`
+[data-theme="dark"] { --color-primary: #93c5fd; }   /* 밝은 파랑 */
+.btn-primary { background: var(--color-primary); color: #fff; }   /* 흰 글자 → 대비 1.6:1 */
+`,
+          good: String.raw`
+:root { --color-primary: #2563eb; --color-on-primary: #ffffff; --color-surface: #fff; --color-on-surface: #111827; }
+[data-theme="dark"] { --color-primary: #93c5fd; --color-on-primary: #0b1a3a; --color-surface: #0b0f19; --color-on-surface: #f3f4f6; }
+.btn-primary { background: var(--color-primary); color: var(--color-on-primary); }
+
+// scripts/check-contrast.ts (토큰 빌드 뒤) — 쌍마다 검사
+import { wcagContrast } from 'culori'
+for (const [bg, fg] of [['primary', 'on-primary'], ['surface', 'on-surface']])
+  for (const theme of ['light', 'dark']) {
+    const ratio = wcagContrast(tokens[theme][bg], tokens[theme][fg])
+    if (ratio < 4.5) { console.error(theme, bg, fg, ratio.toFixed(2)); process.exitCode = 1 }
+  }
+`,
+        },
+        {
+          id: 'l10', short: `다중 브랜드`,
+          title: `브랜드·테넌트별 테마는 속성 하나로 고르고, 컴포넌트는 손대지 않는다`,
+          why: `화이트라벨 서비스에서 브랜드마다 컴포넌트를 분기하면 끝이 없습니다. 브랜드는 의미 토큰의 매핑 집합일 뿐입니다. 서버가 호스트로 브랜드를 정해 data-brand 를 붙이면 CSS 가 나머지를 합니다. 로고·폰트도 토큰(변수) 으로 넣습니다.`,
+          bad: String.raw`
+<template>
+  <AcmeButton v-if="brand === 'acme'" />
+  <GlobexButton v-else-if="brand === 'globex'" />
+  <img :src="brand === 'acme' ? '/acme.svg' : '/globex.svg'" />
+</template>
+`,
+          good: String.raw`
+// server/middleware/brand.ts — 호스트로 브랜드 결정
+export default defineEventHandler((e) => {
+  const host = getRequestHost(e)
+  e.context.brand = host.startsWith('acme.') ? 'acme' : host.startsWith('globex.') ? 'globex' : 'default'
+})
+// app.vue
+const brand = useState('brand', () => useRequestEvent()?.context.brand ?? 'default')
+useHead({ htmlAttrs: { 'data-brand': brand } })
+
+/* assets/css/brands.css — 브랜드는 매핑만 */
+[data-brand="acme"]   { --primary: #e11d48; --font-sans: 'Acme Sans', system-ui; --logo: url(/brands/acme.svg); }
+[data-brand="globex"] { --primary: #0f766e; --font-sans: 'Globex', system-ui; --logo: url(/brands/globex.svg); }
+.logo { background-image: var(--logo); }      /* 컴포넌트는 그대로 */
+`,
+        },
+      ],
+    },
+    {
+      id: 'vue-33', no: 33, name: `폼 라이브러리 비교 (VeeValidate, FormKit, Regle)`,
+      lead: `폼이 몇 개인지, 누가 디자인을 쥐는지에 따라 답이 다릅니다. 직접 만들기, VeeValidate, FormKit, Regle 의 자리를 구분하고, 어느 쪽이든 스키마 공유·검증 타이밍·서버 오류 매핑은 같은 습관으로 합니다.`,
+      lessons: [
+        {
+          id: 'l1', short: `기준`,
+          title: `폼이 두세 개면 직접, 열 개가 넘으면 라이브러리. 기준은 폼의 수와 반복이다`,
+          why: `로그인·문의 두 개에 폼 라이브러리를 들이면 배우는 비용이 더 큽니다. 반대로 관리자 화면 40개를 ref 와 if 로 짜면 검증·오류·dirty 처리가 40벌이 됩니다. "같은 폼 로직을 세 번째 복사하는 순간" 이 도입 시점입니다.`,
+          bad: String.raw`
+// 폼 2개짜리 앱에 FormKit + 플러그인 + 테마 설정 300줄
+// 또는 관리자 40개 화면이 각자 const errors = ref({}); function validate() { if (!form.name) errors.value.name = '...' }
+`,
+          good: String.raw`
+// 폼 2~3개: zod + 작은 컴포저블 (19회차 useForm) 로 충분
+const { values, errors, submit } = useZodForm(loginSchema, login)
+
+// 선택표
+// - 템플릿을 내가 쥐고 폼이 많다           → VeeValidate (Field/useField) 또는 Regle (headless, 더 작음)
+// - 관리자·설문처럼 폼을 "생성" 하고 싶다   → FormKit (스키마로 폼 자체를 만든다)
+// - 디자인 시스템이 이미 있다              → headless (VeeValidate useField / Regle) 가 충돌이 적다
+`,
+        },
+        {
+          id: 'l2', short: `VeeValidate`,
+          title: `VeeValidate 는 useForm + toTypedSchema 로 스키마를 넘기고, 필드는 useField 로 붙인다`,
+          why: `규칙 문자열('required|email') 시대의 API 는 타입이 없습니다. toTypedSchema(zod) 로 넘기면 values 타입이 추론되고 서버와 같은 스키마를 씁니다. 컴포넌트 라이브러리의 입력을 쓰려면 Field 컴포넌트보다 useField 가 자유롭습니다.`,
+          bad: String.raw`
+<Field name="email" rules="required|email" />      <!-- 문자열 규칙: 타입 없음, 서버와 중복 -->
+<ErrorMessage name="email" />
+`,
+          good: String.raw`
+<script setup lang="ts">
+import { useForm, useField } from 'vee-validate'
+import { toTypedSchema } from '@vee-validate/zod'
+import { signupSchema } from '~/shared/schemas/user'       // 서버와 공유 (l5)
+
+const { handleSubmit, isSubmitting, errors } = useForm({ validationSchema: toTypedSchema(signupSchema) })
+const { value: email, errorMessage: emailError, handleBlur } = useField<string>('email')
+const onSubmit = handleSubmit(async (values) => { await $fetch('/api/signup', { method: 'POST', body: values }) })
+</script>
+<template>
+  <form @submit="onSubmit" novalidate>
+    <UiInput v-model="email" type="email" label="이메일" :error="emailError" @blur="handleBlur" />
+    <button :disabled="isSubmitting">가입</button>
+  </form>
+</template>
+`,
+        },
+        {
+          id: 'l3', short: `FormKit`,
+          title: `FormKit 은 폼을 스키마로 "생성" 할 때 쓴다. 디자인을 세밀히 쥐어야 하면 비용을 계산한다`,
+          why: `FormKit 은 입력·라벨·오류·레이아웃까지 한 컴포넌트가 그립니다. 관리자 CRUD 나 설문처럼 폼이 데이터로 정의되면 압도적으로 빠릅니다. 대신 디자인 시스템과 맞추려면 섹션 클래스와 테마를 길게 설정해야 합니다. 그 비용을 처음에 셉니다.`,
+          bad: String.raw`
+<!-- 픽셀 단위 디자인이 정해진 마케팅 폼을 FormKit 으로 → 모든 섹션 스타일 오버라이드와 싸움 -->
+`,
+          good: String.raw`
+<!-- 관리자 화면: 필드 정의가 데이터 → 화면 40개가 설정 40개 -->
+<script setup lang="ts">
+const schema = [
+  { $formkit: 'text', name: 'name', label: '상품명', validation: 'required|length:2,50' },
+  { $formkit: 'number', name: 'price', label: '가격', validation: 'required|min:0', step: 100 },
+  { $formkit: 'select', name: 'status', label: '상태', options: { draft: '임시', live: '판매중' } },
+  { $formkit: 'checkbox', name: 'tags', label: '태그', options: ['신상', '세일'] },
+]
+</script>
+<template>
+  <FormKit type="form" submit-label="저장" @submit="save">
+    <FormKitSchema :schema="schema" />
+  </FormKit>
+</template>
+// 테마: formkit.config.ts 에서 generateClasses 로 Tailwind 클래스를 섹션별로 한 번 선언 (14회차 CRUD 생성 패턴과 결합)
+`,
+        },
+        {
+          id: 'l4', short: `Regle`,
+          title: `Regle 은 headless 다. 템플릿은 내 것, 규칙과 상태만 받는다`,
+          why: `Vuelidate 의 후속으로 타입 추론이 좋고 번들이 작습니다. 컴포넌트를 전혀 제공하지 않으므로 디자인 시스템이 있는 팀에 맞습니다. zod/valibot 스키마도 그대로 받습니다. 대신 Field 컴포넌트나 생성 기능은 없으니 폼이 아주 많으면 반복이 생깁니다.`,
+          bad: String.raw`
+// 디자인 시스템이 있는데 UI 가 포함된 폼 라이브러리를 골라 스타일을 전부 덮어쓴다
+`,
+          good: String.raw`
+<script setup lang="ts">
+import { useRegle } from '@regle/core'
+import { required, email, minLength } from '@regle/rules'
+
+const form = reactive({ email: '', password: '' })
+const { r$ } = useRegle(form, {
+  email: { required, email },
+  password: { required, minLength: minLength(8) },
+})
+async function submit() {
+  const { valid, data } = await r$.$validate()     // data 는 타입이 좁혀진 값
+  if (valid) await login(data)
+}
+</script>
+<template>
+  <UiInput v-model="form.email" label="이메일" :error="r$.$fields.email.$errors[0]" @blur="r$.$fields.email.$touch()" />
+  <UiInput v-model="form.password" type="password" label="비밀번호" :error="r$.$fields.password.$errors[0]" />
+  <button :disabled="r$.$pending" @click="submit">로그인</button>
+</template>
+// zod 가 이미 있으면: import { useRegleSchema } from '@regle/schemas'; useRegleSchema(form, loginSchema)
+`,
+        },
+        {
+          id: 'l5', short: `스키마 공유`,
+          title: `어느 라이브러리든 규칙의 원본은 shared/ 의 zod 스키마 하나다`,
+          why: `클라이언트 규칙은 사용성, 서버 규칙은 안전을 위한 것이고 둘은 같아야 합니다. 라이브러리 고유 규칙(validation: 'required|min:0') 으로 적으면 서버가 다른 언어로 또 적습니다. zod 스키마를 server/api 와 폼이 함께 import 하고, 라이브러리는 어댑터로 받습니다.`,
+          bad: String.raw`
+// 폼: { $formkit: 'number', validation: 'required|min:100' }
+// 서버: if (body.price < 0) throw ...   → 폼은 100 이상, 서버는 0 이상. 다르다
+`,
+          good: String.raw`
+// shared/schemas/product.ts
+export const productSchema = z.object({
+  name: z.string().min(2).max(50),
+  price: z.number().int().min(100),
+  status: z.enum(['draft', 'live']),
+})
+export type ProductInput = z.infer<typeof productSchema>
+
+// server/api/products.post.ts
+const body = await readValidatedBody(event, productSchema.parse)
+
+// VeeValidate: toTypedSchema(productSchema)
+// Regle:       useRegleSchema(form, productSchema)
+// FormKit:     @formkit/zod 플러그인 → createZodPlugin(productSchema, submit)
+// 직접:        useZodForm(productSchema, submit)
+`,
+        },
+        {
+          id: 'l6', short: `타이밍`,
+          title: `첫 검증은 blur 뒤에, 그 다음부터 입력마다. 제출 때는 전부`,
+          why: `타이핑 첫 글자부터 "이메일 형식이 아닙니다" 가 뜨면 공격당하는 느낌입니다. 필드를 떠날 때 처음 검증하고, 한 번 오류가 난 필드는 고치는 즉시 사라지게 입력마다 다시 검사합니다. 제출은 전체를 검사하고 첫 오류 필드로 포커스를 옮깁니다.`,
+          bad: String.raw`
+<input v-model="email" @input="validateEmail" />    <!-- 첫 글자부터 빨간 오류 -->
+`,
+          good: String.raw`
+// VeeValidate: useForm({ validateOnMount: false }) + useField(name, undefined, { validateOnValueUpdate: false }) 로 시작,
+// blur 에서 handleBlur → 오류가 생긴 뒤에는 라이브러리가 입력마다 재검증 (validateOnBlur/validateOnInput 설정)
+// 직접 만든다면:
+const touched = reactive<Record<string, boolean>>({})
+function onBlur(name: string) { touched[name] = true; validateField(name) }
+watch(() => form[name], () => { if (touched[name]) validateField(name) })
+
+async function submit() {
+  const ok = await validateAll()
+  if (!ok) { Object.keys(form).forEach(k => touched[k] = true); focusFirstError(); return }
+}
+function focusFirstError() {
+  const first = document.querySelector<HTMLElement>('[aria-invalid="true"]'); first?.focus()
+}
+`,
+        },
+        {
+          id: 'l7', short: `서버 오류`,
+          title: `422 응답의 필드 오류는 setErrors 로 해당 필드에 붙인다. 토스트로 뭉개지 않는다`,
+          why: `"이미 사용 중인 이메일" 은 서버만 압니다. 그걸 상단 토스트로 띄우면 사용자는 어느 칸인지 찾아야 합니다. 서버 오류를 { field: message } 형태로 받아 폼 라이브러리의 setErrors 에 넣으면 클라이언트 검증 오류와 똑같이 보입니다(27회차 createError 의 data 활용).`,
+          bad: String.raw`
+try { await $fetch('/api/signup', { method: 'POST', body }) }
+catch (e) { toast.error('저장에 실패했습니다') }     // 어느 필드가 왜?
+`,
+          good: String.raw`
+// server: throw createError({ statusCode: 422, data: { errors: { email: '이미 사용 중인 이메일입니다' } } })
+
+// VeeValidate
+const { handleSubmit, setErrors } = useForm({ validationSchema })
+const onSubmit = handleSubmit(async (values) => {
+  try { await $fetch('/api/signup', { method: 'POST', body: values }) }
+  catch (e: any) {
+    if (e.statusCode === 422 && e.data?.errors) { setErrors(e.data.errors); focusFirstError(); return }
+    throw e                                        // 나머지는 전역 처리 (27회차)
+  }
+})
+// Regle: r$.$fields.email.$externalErrors 또는 useRegle 의 externalErrors 옵션에 서버 오류를 넣는다
+// zod 파싱 오류를 서버가 돌려줄 때: error.flatten().fieldErrors → 같은 모양으로 변환
+`,
+        },
+        {
+          id: 'l8', short: `배열 필드`,
+          title: `동적 필드 목록은 useFieldArray 로 다루고 키는 인덱스가 아니라 고유 id 다`,
+          why: `옵션 추가·삭제가 있는 폼에서 v-for 키를 인덱스로 주면 중간 삭제 때 입력값과 오류가 밀립니다. 라이브러리의 필드 배열 API 는 항목마다 key 를 만들어 주고 push/remove/move 때 검증 상태도 같이 옮깁니다.`,
+          bad: String.raw`
+<div v-for="(opt, i) in form.options" :key="i">          <!-- 인덱스 키 -->
+  <input v-model="opt.label" />
+  <button @click="form.options.splice(i, 1)">삭제</button>  <!-- 오류 상태가 다음 항목으로 밀림 -->
+</div>
+`,
+          good: String.raw`
+<script setup lang="ts">
+import { useFieldArray } from 'vee-validate'
+const { fields, push, remove, move } = useFieldArray<{ label: string; price: number }>('options')
+</script>
+<template>
+  <div v-for="(f, i) in fields" :key="f.key">            <!-- 라이브러리가 준 고유 key -->
+    <UiInput v-model="f.value.label" :label="'옵션 ' + (i + 1)" />
+    <button type="button" @click="remove(i)">삭제</button>
+  </div>
+  <button type="button" @click="push({ label: '', price: 0 })">옵션 추가</button>
+</template>
+// 스키마: options: z.array(optionSchema).min(1, '옵션을 하나 이상 넣어 주세요').max(20)
+`,
+        },
+        {
+          id: 'l9', short: `비동기 검증`,
+          title: `아이디 중복 같은 서버 검증은 디바운스·취소·캐시를 갖춘 규칙으로 만든다`,
+          why: `입력마다 서버에 물으면 요청이 쏟아지고, 응답 순서가 뒤집히면 "사용 가능" 이 잘못 뜹니다. 400ms 디바운스, 이전 요청 취소(AbortController), 같은 값 캐시 세 가지를 갖춘 비동기 규칙 하나를 만들어 어느 폼에서나 씁니다.`,
+          bad: String.raw`
+watch(username, async (v) => { available.value = (await $fetch('/api/check?u=' + v)).ok })   // 폭주 + 순서 역전
+`,
+          good: String.raw`
+// composables/useAsyncRule.ts
+export function useAsyncRule(check: (v: string, signal: AbortSignal) => Promise<boolean>, message: string, wait = 400) {
+  const cache = new Map<string, boolean>(); let ctrl: AbortController | null = null; let timer: any
+  return (value: string) => new Promise<true | string>((resolve) => {
+    if (!value) return resolve(true)
+    if (cache.has(value)) return resolve(cache.get(value) ? true : message)
+    clearTimeout(timer); ctrl?.abort(); ctrl = new AbortController()
+    const signal = ctrl.signal
+    timer = setTimeout(async () => {
+      try { const ok = await check(value, signal); cache.set(value, ok); resolve(ok ? true : message) }
+      catch (e: any) { if (e.name !== 'AbortError') resolve(true) }   // 네트워크 오류는 서버 제출에서 걸리게 통과
+    }, wait)
+  })
+}
+const usernameFree = useAsyncRule((u, signal) => $fetch('/api/users/check', { query: { u }, signal }).then(r => r.available), '이미 사용 중인 아이디입니다')
+// VeeValidate: zod 스키마에 .refine(usernameFree) 대신 useField 의 rules 로, Regle: withAsync(usernameFree)
+`,
+        },
+        {
+          id: 'l10', short: `상태 UX`,
+          title: `dirty 면 떠날 때 묻고, 제출 중엔 잠그고, 성공하면 새 값으로 reset 한다`,
+          why: `세 가지가 빠진 폼이 가장 많습니다. 작성 중 뒤로 가기로 날리고, 더블 클릭으로 두 번 저장되고, 저장 뒤에도 "변경 사항 있음" 이 남습니다. 라이브러리는 meta.dirty, isSubmitting, resetForm 을 주므로 연결만 하면 됩니다.`,
+          bad: String.raw`
+<button @click="save">저장</button>          <!-- 더블 클릭 2회 저장 -->
+// 저장 후 아무것도 안 함 → 폼은 여전히 dirty, 떠날 때 "저장하지 않은 변경" 경고
+`,
+          good: String.raw`
+const { handleSubmit, isSubmitting, meta, resetForm } = useForm({ validationSchema, initialValues: props.product })
+
+onBeforeRouteLeave(() => {
+  if (meta.value.dirty && !confirm('저장하지 않은 변경이 있습니다. 나갈까요?')) return false
+})
+useEventListener(window, 'beforeunload', (e) => { if (meta.value.dirty) e.preventDefault() })
+
+const onSubmit = handleSubmit(async (values) => {
+  const saved = await $fetch('/api/products/' + values.id, { method: 'PUT', body: values })
+  resetForm({ values: saved })        // 서버가 돌려준 값이 새 initial → dirty=false
+  toast.success('저장했습니다')
+})
+<button type="submit" :disabled="isSubmitting || !meta.dirty">{{ isSubmitting ? '저장 중…' : '저장' }}</button>
+`,
+        },
+      ],
+    },
+    {
+      id: 'vue-34', no: 34, name: `상태 머신 (XState) 과 복잡한 UI 흐름`,
+      lead: `isLoading, isError, isRetrying 같은 불리언이 셋을 넘으면 "있을 수 없는 조합" 이 생깁니다. 상태를 이름 붙은 하나의 값으로 만들고, 전이를 표로 적고, 부작용을 흐름에서 떼어 내는 습관입니다. 라이브러리 없이 시작해 필요할 때 XState 로 갑니다.`,
+      lessons: [
+        {
+          id: 'l1', short: `신호`,
+          title: `불리언 플래그가 셋 이상이면 상태 머신을 의심한다`,
+          why: `isLoading && isError 처럼 동시에 참일 수 없는 조합을 코드가 막지 못합니다. 버그는 늘 그 조합에서 납니다. 상태를 'idle' | 'loading' | 'error' | 'success' 하나로 만들면 불가능한 조합이 타입에서 사라집니다.`,
+          bad: String.raw`
+const isLoading = ref(false), isError = ref(false), isSuccess = ref(false), isRetrying = ref(false)
+// 2^4 = 16 조합 중 유효한 건 4개. 나머지 12개를 if 로 막는다 (못 막는다)
+if (isLoading.value && !isError.value && !isRetrying.value) ...
+`,
+          good: String.raw`
+type State =
+  | { status: 'idle' }
+  | { status: 'loading'; attempt: number }
+  | { status: 'error'; message: string; attempt: number }
+  | { status: 'success'; data: Order }
+const state = ref<State>({ status: 'idle' })
+// 템플릿: v-if="state.status === 'loading'" — 조합은 4개뿐, 데이터는 그 상태에만 존재
+`,
+        },
+        {
+          id: 'l2', short: `라이브러리 전`,
+          title: `먼저 union 타입과 전이 함수로 쓴다. 전이표가 커지면 그때 XState`,
+          why: `상태 머신은 사고방식이지 패키지가 아닙니다. 상태 5개·이벤트 6개까지는 reducer 하나로 충분하고 의존성도 없습니다. 전이가 20개를 넘거나, 병렬·중첩 상태가 필요하거나, 그림으로 공유해야 할 때 XState 가 값을 합니다.`,
+          bad: String.raw`
+// 상태 3개짜리 토글에 XState + inspector + 액터 시스템 도입
+`,
+          good: String.raw`
+type Event = { type: 'FETCH' } | { type: 'RESOLVE'; data: Order } | { type: 'REJECT'; message: string } | { type: 'RETRY' }
+function transition(s: State, e: Event): State {
+  switch (s.status) {
+    case 'idle':    return e.type === 'FETCH' ? { status: 'loading', attempt: 1 } : s
+    case 'loading': return e.type === 'RESOLVE' ? { status: 'success', data: e.data }
+                         : e.type === 'REJECT' ? { status: 'error', message: e.message, attempt: s.attempt } : s
+    case 'error':   return e.type === 'RETRY' && s.attempt < 3 ? { status: 'loading', attempt: s.attempt + 1 } : s
+    case 'success': return e.type === 'FETCH' ? { status: 'loading', attempt: 1 } : s
+  }
+}
+const state = ref<State>({ status: 'idle' })
+const send = (e: Event) => { state.value = transition(state.value, e) }
+// 테스트: expect(transition({ status: 'error', attempt: 3, message: '' }, { type: 'RETRY' }).status).toBe('error')
+`,
+        },
+        {
+          id: 'l3', short: `XState v5`,
+          title: `XState 는 setup() 으로 타입을 먼저 선언하고, 컴포넌트는 useMachine 으로 붙인다`,
+          why: `v5 는 setup({ types, actions, guards, actors }) 에 모든 것을 선언하고 createMachine 은 전이만 적습니다. 이렇게 해야 이벤트·컨텍스트 타입이 추론되고, 액션 이름 오타가 컴파일 오류가 됩니다. @xstate/vue 의 useMachine 이 snapshot 과 send 를 반응형으로 줍니다.`,
+          bad: String.raw`
+const machine = createMachine({ /* 타입 없이 */ states: { idle: { on: { FETCH: 'loding' } } } })   // 오타가 런타임까지 감
+`,
+          good: String.raw`
+// machines/order.ts
+import { setup, assign, fromPromise } from 'xstate'
+export const orderMachine = setup({
+  types: { context: {} as { order: Order | null; attempt: number; error: string | null }, events: {} as { type: 'FETCH'; id: string } | { type: 'RETRY' } },
+  actors: { loadOrder: fromPromise(({ input }: { input: { id: string } }) => $fetch<Order>('/api/orders/' + input.id)) },
+  guards: { canRetry: ({ context }) => context.attempt < 3 },
+}).createMachine({
+  id: 'order', initial: 'idle',
+  context: { order: null, attempt: 0, error: null },
+  states: {
+    idle: { on: { FETCH: { target: 'loading', actions: assign({ attempt: 1 }) } } },
+    loading: { invoke: { src: 'loadOrder', input: ({ event }) => ({ id: (event as any).id }),
+      onDone: { target: 'success', actions: assign({ order: ({ event }) => event.output }) },
+      onError: { target: 'error', actions: assign({ error: ({ event }) => String(event.error) }) } } },
+    error: { on: { RETRY: { guard: 'canRetry', target: 'loading', actions: assign({ attempt: ({ context }) => context.attempt + 1 }) } } },
+    success: { type: 'final' },
+  },
+})
+
+// 컴포넌트
+import { useMachine } from '@xstate/vue'
+const { snapshot, send } = useMachine(orderMachine)
+// snapshot.value.matches('loading'), snapshot.value.context.order, send({ type: 'FETCH', id })
+`,
+        },
+        {
+          id: 'l4', short: `이벤트 이름`,
+          title: `이벤트는 사용자의 의도(SUBMIT) 로 이름 짓고, 조건은 guard 로 뺀다`,
+          why: `BUTTON_CLICKED 는 어떤 버튼인지, 그래서 뭘 하려는지 말하지 않습니다. 이벤트를 의도로 적으면 머신이 곧 요구사항 문서가 됩니다. "재고가 있을 때만 결제로" 같은 조건은 컴포넌트의 if 가 아니라 guard 에 두어 흐름 전체가 한 파일에 보이게 합니다.`,
+          bad: String.raw`
+// 컴포넌트
+function onClick() { if (stock.value > 0 && !submitting.value && agreed.value) send({ type: 'BUTTON_CLICKED' }) }
+`,
+          good: String.raw`
+// 컴포넌트: 의도만 보낸다
+<button @click="send({ type: 'PAY' })">결제</button>
+
+// 머신: 조건은 guard, 이름은 의도
+states: {
+  review: { on: {
+    PAY: [
+      { guard: 'inStock', target: 'paying' },
+      { target: 'outOfStock' },                 // 첫 guard 가 거짓이면 다음 전이
+    ],
+    EDIT_ADDRESS: 'address',
+  } },
+}
+guards: { inStock: ({ context }) => context.items.every(i => i.stock > 0) }
+`,
+        },
+        {
+          id: 'l5', short: `부작용`,
+          title: `fetch, 타이머, 저장은 actor 와 action 으로. 컴포넌트는 send 만 한다`,
+          why: `상태는 머신이 들고 fetch 는 컴포넌트가 하면 "loading 인데 요청이 없다", "언마운트됐는데 응답이 온다" 가 생깁니다. 비동기 작업을 머신의 invoke 로 두면 상태를 떠날 때 자동으로 취소되고, 결과는 onDone/onError 전이로 들어옵니다.`,
+          bad: String.raw`
+send({ type: 'FETCH' })
+const data = await $fetch('/api/order')          // 머신과 따로 노는 요청
+send({ type: 'RESOLVE', data })                  // 그 사이 사용자가 취소했다면?
+`,
+          good: String.raw`
+// 타이머도 actor: 10초 후 자동 닫힘
+import { fromCallback } from 'xstate'
+actors: {
+  autoClose: fromCallback(({ sendBack }) => { const t = setTimeout(() => sendBack({ type: 'TIMEOUT' }), 10_000); return () => clearTimeout(t) }),
+}
+states: {
+  open: { invoke: { src: 'autoClose' }, on: { TIMEOUT: 'closed', CLOSE: 'closed' } },   // 상태를 떠나면 타이머 정리
+  closed: {},
+}
+// 저장 같은 동기 부작용은 action 으로: actions: { persist: ({ context }) => sessionStorage.setItem('draft', JSON.stringify(context.form)) }
+`,
+        },
+        {
+          id: 'l6', short: `컨텍스트`,
+          title: `컨텍스트에는 흐름에 필요한 것만. 서버 데이터는 id 로 가리키고 캐시에 둔다`,
+          why: `주문 목록 전체를 머신 컨텍스트에 복사하면 Pinia·useFetch 캐시와 두 벌이 되고 어느 쪽이 진실인지 모릅니다. 머신은 "어디까지 왔는가" 를, 데이터 계층은 "무엇인가" 를 맡깁니다. 컨텍스트에는 선택한 id, 시도 횟수, 입력값처럼 흐름 자체의 데이터만 둡니다.`,
+          bad: String.raw`
+context: { orders: Order[]; products: Product[]; user: User; cart: Cart; ... }   // 스토어 복제
+`,
+          good: String.raw`
+context: { selectedOrderId: string | null; step: 1 | 2 | 3; attempt: number; shippingForm: ShippingInput | null }
+// 데이터는 바깥에서
+const { data: order } = useFetch(() => '/api/orders/' + snapshot.value.context.selectedOrderId, { immediate: false })
+// 머신이 바깥 데이터를 봐야 하면 input 으로 넘긴다: useMachine(machine, { input: { userId } })
+`,
+        },
+        {
+          id: 'l7', short: `분리`,
+          title: `머신은 .ts 모듈로 두고 컴포넌트 없이 테스트한다`,
+          why: `머신이 컴포넌트 안에 있으면 테스트에 마운트와 DOM 이 필요합니다. 모듈로 빼면 createActor 로 돌리고 send 한 뒤 snapshot 을 검사하면 끝입니다. 흐름 버그의 대부분이 여기서 잡히고, 컴포넌트 테스트는 "상태를 그렇게 그리는가" 만 보면 됩니다.`,
+          bad: String.raw`
+// 컴포넌트 안에 createMachine 300줄 + 템플릿 → 테스트하려면 전부 마운트
+`,
+          good: String.raw`
+// machines/checkout.test.ts
+import { createActor } from 'xstate'
+import { checkoutMachine } from './checkout'
+
+it('재고가 없으면 결제로 못 간다', () => {
+  const actor = createActor(checkoutMachine, { input: { items: [{ id: 'a', stock: 0 }] } }).start()
+  actor.send({ type: 'PAY' })
+  expect(actor.getSnapshot().matches('outOfStock')).toBe(true)
+})
+it('3번 실패하면 재시도 불가', () => {
+  const actor = createActor(checkoutMachine.provide({ actors: { pay: fromPromise(async () => { throw new Error('x') }) } })).start()
+  ...
+})
+// 컴포넌트 테스트는 snapshot 을 주입해 "error 상태면 재시도 버튼이 보이는가" 만
+`,
+        },
+        {
+          id: 'l8', short: `위자드`,
+          title: `다단계 폼은 단계가 상태, 뒤로 가기는 전이, 단계 통과 조건은 guard 다`,
+          why: `step 숫자와 if 로 만든 위자드는 "2단계를 건너뛰고 3단계" 같은 비정상 경로를 못 막고, 브라우저 뒤로 가기와 어긋납니다. 단계를 상태로 두고 NEXT/BACK 만 허용하면 경로가 통제되고, 라우트 쿼리와 동기화하면 뒤로 가기도 맞습니다.`,
+          bad: String.raw`
+const step = ref(1)
+function next() { if (step.value === 1 && validShipping()) step.value = 2; else if (step.value === 2 && validPayment()) step.value = 3 }
+// URL 은 항상 /checkout → 뒤로 가기는 장바구니로 튐
+`,
+          good: String.raw`
+states: {
+  shipping: { on: { NEXT: { guard: 'shippingValid', target: 'payment' } } },
+  payment:  { on: { NEXT: { guard: 'paymentValid', target: 'review' }, BACK: 'shipping' } },
+  review:   { on: { CONFIRM: 'submitting', BACK: 'payment' } },
+  submitting: { invoke: { src: 'placeOrder', onDone: 'done', onError: 'review' } },
+  done: { type: 'final' },
+}
+// 상태 ↔ URL
+const route = useRoute(), router = useRouter()
+watch(() => snapshot.value.value, (s) => router.replace({ query: { step: String(s) } }))
+onMounted(() => { const s = route.query.step; if (s === 'payment' || s === 'review') send({ type: 'RESTORE', step: s }) })
+`,
+        },
+        {
+          id: 'l9', short: `복구`,
+          title: `긴 흐름은 스냅샷을 저장하고 새로고침 뒤 복구한다`,
+          why: `결제 5단계 중 4단계에서 새로고침하면 처음으로 돌아가는 서비스는 이탈을 만듭니다. XState 스냅샷은 직렬화되므로 sessionStorage 에 넣고 createActor 의 snapshot 옵션으로 복구합니다. 민감 정보(카드 번호) 는 컨텍스트에 넣지 않습니다.`,
+          bad: String.raw`
+// 새로고침 → 머신 initial → 1단계. 입력 전부 소실
+`,
+          good: String.raw`
+const KEY = 'checkout:' + cartId
+const saved = sessionStorage.getItem(KEY)
+const { snapshot, send, actorRef } = useMachine(checkoutMachine, {
+  snapshot: saved ? JSON.parse(saved) : undefined,
+})
+actorRef.subscribe((snap) => {
+  if (snap.status === 'done') sessionStorage.removeItem(KEY)
+  else sessionStorage.setItem(KEY, JSON.stringify(actorRef.getPersistedSnapshot()))
+})
+// 컨텍스트 규칙: 카드 번호·비밀번호 없음. 복구 시 서버 상태와 어긋날 수 있는 값(재고) 은 복구 직후 다시 확인(VERIFY 이벤트)
+`,
+        },
+        {
+          id: 'l10', short: `그림`,
+          title: `머신이 곧 스펙이다. 그림으로 공유하고, 중첩은 두 단계까지만`,
+          why: `상태 머신의 가장 큰 가치는 기획·디자인과 같은 그림을 보는 것입니다. Stately 편집기나 inspector 로 시각화해 리뷰에 붙입니다. 반대로 중첩·병렬 상태를 남용하면 그림이 읽히지 않습니다. 세 단계 이상 중첩되면 하위 머신으로 나눕니다.`,
+          bad: String.raw`
+states: { app: { states: { checkout: { states: { payment: { states: { card: { states: { input: { states: { ... } } } } } } } } } } }   // 5단계 중첩
+`,
+          good: String.raw`
+// 개발 중 시각화 (브라우저 inspector)
+import { createBrowserInspector } from '@statelyai/inspect'
+const { inspect } = import.meta.dev ? createBrowserInspector() : { inspect: undefined }
+useMachine(checkoutMachine, { inspect })
+
+// 큰 흐름은 하위 머신으로: payment 는 자식 액터
+states: {
+  payment: { invoke: { id: 'payment', src: paymentMachine, input: ({ context }) => ({ amount: context.total }),
+    onDone: 'review' } },
+}
+// PR 설명에 Stately 링크 또는 inspector 스크린샷. 전이표가 바뀌면 그림도 바뀐다 → 리뷰어가 코드 대신 그림을 본다
+`,
+        },
+      ],
+    },
+    {
+      id: 'vue-35', no: 35, name: `컴포넌트 문서화 (Storybook, Histoire)`,
+      lead: `공용 컴포넌트가 생기면 "어떤 상태가 있고 어떻게 쓰는가" 를 코드로 적어 두는 습관입니다. 스토리는 상태의 열거이고, 시각 회귀와 상호작용 테스트의 재료이며, 디자이너와 같은 화면을 보는 자리입니다.`,
+      lessons: [
+        {
+          id: 'l1', short: `언제`,
+          title: `공용 UI 패키지가 생기는 순간 시작한다. 페이지는 스토리로 만들지 않는다`,
+          why: `페이지는 라우터·스토어·API 에 얽혀 스토리로 격리하기 어렵고, E2E 가 맡는 영역입니다. 스토리의 대상은 재사용되는 버튼·입력·카드·모달·테이블입니다. 패키지로 나뉘기 전이라도 components/ui 가 열 개를 넘으면 도입합니다.`,
+          bad: String.raw`
+// stories/OrdersPage.stories.ts — useFetch, Pinia, 라우터 전부 모킹해서 페이지를 스토리로 → 유지비만 크다
+`,
+          good: String.raw`
+// 대상: packages/ui/src/** 또는 components/ui/**
+// 각 컴포넌트 옆에 스토리: Button.vue + Button.stories.ts (또는 Button.story.vue)
+// 페이지·레이아웃·기능 컴포넌트(OrderList) 는 제외 — 21회차 E2E 로
+`,
+        },
+        {
+          id: 'l2', short: `선택`,
+          title: `Vue 전용·가벼움은 Histoire, 생태계·디자이너 협업은 Storybook`,
+          why: `Histoire 는 Vite 네이티브라 설정이 거의 없고 story.vue 로 템플릿 그대로 씁니다. Storybook 은 애드온(a11y, 인터랙션, Figma), 포터블 스토리(vitest 재사용), Chromatic 연동이 강합니다. 작은 팀·Vue 만이면 Histoire, 디자인 시스템 규모면 Storybook.`,
+          bad: String.raw`
+# 두 가지를 다 설치해 두고 스토리 일부는 .stories.ts, 일부는 .story.vue
+`,
+          good: String.raw`
+# Histoire
+pnpm add -D histoire @histoire/plugin-vue      # histoire.config.ts 는 거의 비어도 된다
+# Button.story.vue
+<script setup lang="ts">
+import { ref } from 'vue'
+import Button from './Button.vue'
+const variant = ref<'primary' | 'ghost'>('primary')
+</script>
+<template>
+  <Story title="ui/Button">
+    <Variant title="primary"><Button variant="primary">저장</Button></Variant>
+    <Variant title="disabled"><Button disabled>저장</Button></Variant>
+    <Variant title="playground">
+      <template #controls><HstSelect v-model="variant" :options="['primary', 'ghost']" title="variant" /></template>
+      <Button :variant="variant">저장</Button>
+    </Variant>
+  </Story>
+</template>
+
+# Storybook
+pnpm dlx storybook@latest init          # @storybook/vue3-vite 프레임워크 선택
+`,
+        },
+        {
+          id: 'l3', short: `상태 열거`,
+          title: `스토리는 "예쁜 기본값" 하나가 아니라 상태의 전수 목록이다`,
+          why: `기본 상태 하나만 있는 스토리는 장식입니다. 로딩·오류·빈·긴 텍스트·비활성·포커스·RTL 까지 열거해야 디자이너가 빠뜨린 상태를 찾고, 시각 회귀가 그 상태들을 지킵니다. 상태 목록 자체가 컴포넌트 스펙입니다.`,
+          bad: String.raw`
+export const Default = { args: { label: '저장' } }      // 끝
+`,
+          good: String.raw`
+// Button.stories.ts
+import type { Meta, StoryObj } from '@storybook/vue3'
+import Button from './Button.vue'
+const meta: Meta<typeof Button> = { component: Button, title: 'ui/Button', args: { default: '저장' } }
+export default meta
+type S = StoryObj<typeof Button>
+
+export const Primary: S = {}
+export const Ghost: S = { args: { variant: 'ghost' } }
+export const Loading: S = { args: { loading: true } }
+export const Disabled: S = { args: { disabled: true } }
+export const WithIcon: S = { args: { icon: 'save' } }
+export const LongLabel: S = { args: { default: '정말로 아주 긴 버튼 라벨이 들어왔을 때 줄바꿈과 말줄임 처리' } }
+export const Focused: S = { parameters: { pseudo: { focusVisible: true } } }
+export const Small: S = { args: { size: 'sm' } }
+// 데이터 컴포넌트(Table) 라면: Empty, Error, OneRow, ThousandRows, ColumnOverflow
+`,
+        },
+        {
+          id: 'l4', short: `컨트롤`,
+          title: `props 는 타입에서 컨트롤을 자동 생성하게 두고, 수동 argTypes 는 예외만`,
+          why: `argTypes 를 손으로 적으면 props 가 바뀔 때 스토리가 거짓말을 합니다. defineProps 에 타입을 제대로 적으면 Storybook 의 vue-component-meta 가 컨트롤과 설명을 뽑아냅니다. JSDoc 주석이 그대로 문서가 됩니다.`,
+          bad: String.raw`
+argTypes: { variant: { control: 'select', options: ['primary', 'ghost'] }, size: { control: 'select', options: ['sm', 'md'] } }   // 'lg' 추가되면 누락
+`,
+          good: String.raw`
+<!-- Button.vue: 타입 + JSDoc 이 곧 문서 -->
+<script setup lang="ts">
+withDefaults(defineProps<{
+  /** 시각적 강조 수준 */
+  variant?: 'primary' | 'ghost' | 'danger'
+  /** 높이와 패딩 */
+  size?: 'sm' | 'md' | 'lg'
+  /** 진행 중 표시. 클릭 불가 */
+  loading?: boolean
+}>(), { variant: 'primary', size: 'md' })
+</script>
+
+// .storybook/main.ts — 타입에서 컨트롤·설명 추출
+export default { framework: '@storybook/vue3-vite', docs: { autodocs: 'tag' },
+  async viteFinal(c) { return c },
+  // vue-component-meta 를 docgen 으로
+  // framework: { name: '@storybook/vue3-vite', options: { docgen: 'vue-component-meta' } }
+}
+`,
+        },
+        {
+          id: 'l5', short: `조합표`,
+          title: `size × variant × state 를 한 화면에 깔아 두는 매트릭스 스토리를 만든다`,
+          why: `변형 하나씩 클릭해 보면 "ghost 의 sm 에서만 패딩이 이상한" 조합을 놓칩니다. 모든 조합을 격자로 그린 스토리 하나는 디자이너 검수와 시각 회귀 스냅샷에 가장 효율이 좋습니다(32회차 variants 선언과 짝).`,
+          bad: String.raw`
+// 조합을 사람이 하나씩 컨트롤 바꿔 가며 확인
+`,
+          good: String.raw`
+export const Matrix: S = {
+  render: () => ({
+    components: { Button },
+    setup: () => ({ variants: ['primary', 'ghost', 'danger'], sizes: ['sm', 'md', 'lg'], states: [{}, { disabled: true }, { loading: true }] }),
+    template: /* html */ \`
+      <table><tr><th></th><th v-for="s in sizes" :key="s">{{ s }}</th></tr>
+        <template v-for="v in variants" :key="v"><tr v-for="(st, i) in states" :key="i">
+          <th>{{ v }} {{ Object.keys(st)[0] ?? '' }}</th>
+          <td v-for="s in sizes" :key="s"><Button :variant="v" :size="s" v-bind="st">저장</Button></td>
+        </tr></template>
+      </table>\`,
+  }),
+  parameters: { controls: { disable: true } },
+}
+`,
+        },
+        {
+          id: 'l6', short: `전역 의존`,
+          title: `Pinia·라우터·i18n 은 데코레이터로 한 번 넣고, 컴포넌트는 전역에 덜 기대게 만든다`,
+          why: `스토리에서 "useRoute is undefined" 가 나면 두 가지 신호입니다. 하나는 전역 설정이 빠진 것이고, 다른 하나는 공용 컴포넌트가 라우터에 직접 의존한다는 것입니다. 전자는 preview.ts 데코레이터로, 후자는 props/slots 로 돌려 해결합니다(29회차 l3).`,
+          bad: String.raw`
+// 스토리마다 setup(() => { setActivePinia(createPinia()); app.use(router); app.use(i18n) })
+`,
+          good: String.raw`
+// .storybook/preview.ts
+import { setup } from '@storybook/vue3'
+import { createPinia } from 'pinia'
+import { createRouter, createMemoryHistory } from 'vue-router'
+import { i18n } from '../src/i18n'
+setup((app) => {
+  app.use(createPinia())
+  app.use(createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: { template: '<div/>' } }] }))
+  app.use(i18n)
+})
+export const decorators = [(story) => ({ components: { story }, template: '<div class="p-4 bg-surface text-fg"><story /></div>' })]
+// 테마 토글: globalTypes.theme + 데코레이터에서 document.documentElement.dataset.theme = context.globals.theme
+
+// 그리고 공용 컴포넌트는 <NuxtLink :to> 대신 :href + @click 또는 'to' prop 을 받아 라우터 없이도 그려지게
+`,
+        },
+        {
+          id: 'l7', short: `한 벌`,
+          title: `스토리에 play 를 붙여 상호작용을 검증하고, vitest 에서 같은 스토리를 다시 쓴다`,
+          why: `스토리와 단위 테스트가 같은 컴포넌트를 따로 마운트하면 두 벌을 유지합니다. Storybook 의 play 함수는 브라우저에서 돌고, portable stories 로 vitest 에서도 그대로 실행됩니다. 스토리 한 벌이 문서·시각 회귀·상호작용 테스트를 다 맡습니다.`,
+          bad: String.raw`
+// Button.stories.ts 와 Button.test.ts 가 각자 mount(Button, { props }) — 변형이 바뀌면 두 군데 수정
+`,
+          good: String.raw`
+// Modal.stories.ts
+import { expect, userEvent, within } from '@storybook/test'
+export const OpensAndTrapsFocus: S = {
+  args: { open: true, title: '삭제할까요?' },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement)
+    await expect(c.getByRole('dialog', { name: '삭제할까요?' })).toBeVisible()
+    await userEvent.tab()
+    await expect(c.getByRole('button', { name: '취소' })).toHaveFocus()
+    await userEvent.keyboard('{Escape}')
+    await expect(c.queryByRole('dialog')).not.toBeInTheDocument()
+  },
+}
+
+// vitest.config.ts — 스토리를 테스트로 (@storybook/addon-vitest, 브라우저 모드)
+import { storybookTest } from '@storybook/addon-vitest/vitest-plugin'
+export default defineConfig({ plugins: [storybookTest()], test: { browser: { enabled: true, provider: 'playwright', instances: [{ browser: 'chromium' }] } } })
+// → 모든 스토리가 "렌더되는가" 스모크 + play 가 있는 것은 상호작용 테스트
+`,
+        },
+        {
+          id: 'l8', short: `사용 가이드`,
+          title: `문서 페이지에는 "언제 쓰고 언제 쓰지 않는지" 와 접근성 노트를 적는다`,
+          why: `props 표는 자동 생성됩니다. 사람이 적어야 하는 건 판단입니다. "확인 모달 대신 인라인 되돌리기를 쓸 것", "아이콘만 있는 버튼은 aria-label 필수" 같은 한 줄이 잘못된 사용을 막습니다. autodocs 위에 MDX 한 장을 얹습니다.`,
+          bad: String.raw`
+// 자동 생성 props 표만 있는 문서. 팀원이 Modal 을 토스트 용도로 쓴다
+`,
+          good: String.raw`
+{/* Modal.mdx */}
+import { Meta, Canvas, Controls } from '@storybook/blocks'
+import * as Stories from './Modal.stories'
+
+<Meta of={Stories} />
+# Modal
+사용자의 결정을 받아야 할 때만 씁니다. 결과 알림은 Toast, 되돌릴 수 있는 삭제는 인라인 Undo 를 쓰세요.
+
+## 접근성
+- 열리면 첫 포커스는 가장 안전한 버튼(취소) 에, Esc 로 닫힙니다. 포커스는 열기 전 요소로 돌아갑니다 (22회차).
+- title 은 필수이며 aria-labelledby 로 연결됩니다.
+
+<Canvas of={Stories.Default} />
+<Controls />
+
+## 하지 말 것
+- 모달 위에 모달을 열지 않습니다. 단계가 필요하면 안에서 전환합니다.
+`,
+        },
+        {
+          id: 'l9', short: `시각 회귀`,
+          title: `스토리를 스크린샷으로 굳혀 두고 PR 마다 비교한다. 범위는 공용 컴포넌트만`,
+          why: `CSS 한 줄이 어디를 깨뜨렸는지 사람 눈으로는 못 봅니다. 스토리마다 스크린샷을 기준선으로 두면 변화가 diff 로 보입니다. Chromatic 이 가장 쉽고, 직접 하려면 Storybook test-runner 나 Playwright 로 스토리 URL 을 찍습니다(21회차 시각 회귀 범위).`,
+          bad: String.raw`
+// 페이지 전체 스크린샷 비교 → 데이터·날짜·광고가 바뀔 때마다 실패. 결국 무시
+`,
+          good: String.raw`
+# Chromatic (Storybook)
+pnpm add -D chromatic
+npx chromatic --project-token=$CHROMATIC_TOKEN --only-changed      # 바뀐 스토리만, PR 에 리뷰 링크
+
+# 직접: Storybook 을 정적 빌드한 뒤 Playwright 로 스토리 iframe 찍기
+// e2e/visual.spec.ts
+for (const id of storyIds) test(id, async ({ page }) => {
+  await page.goto('http://localhost:6006/iframe.html?id=' + id + '&viewMode=story')
+  await page.locator('#storybook-root').waitFor()
+  await expect(page).toHaveScreenshot(id + '.png', { animations: 'disabled', maxDiffPixelRatio: 0.001 })
+})
+// 기준선은 리눅스 CI 에서만 생성 (OS 마다 폰트 렌더링이 달라 로컬 기준선은 쓰지 않는다)
+`,
+        },
+        {
+          id: 'l10', short: `운영`,
+          title: `스토리 없는 공용 컴포넌트는 머지되지 않게 하고, 빌드를 배포해 링크로 공유한다`,
+          why: `문서는 강제하지 않으면 썩습니다. ui/ 에 컴포넌트가 추가될 때 스토리 파일이 없으면 CI 가 실패하게 두면 됩니다. 정적 빌드를 Pages 나 Chromatic 에 올려 디자이너·기획이 링크로 보게 하면 "최신 버전이 뭐예요" 가 사라집니다.`,
+          bad: String.raw`
+// 스토리북은 개발자 로컬에서만. 디자이너는 스크린샷을 슬랙으로 요청
+`,
+          good: String.raw`
+// scripts/check-stories.ts (CI)
+import { globSync } from 'node:fs'
+const comps = globSync('packages/ui/src/**/*.vue').filter(f => !f.includes('/internal/'))
+const missing = comps.filter(f => !existsSync(f.replace(/\.vue$/, '.stories.ts')) && !existsSync(f.replace(/\.vue$/, '.story.vue')))
+if (missing.length) { console.error('스토리 없음:', missing); process.exit(1) }
+
+# 배포: main 머지 시 정적 빌드 → GitHub Pages (또는 Chromatic 의 호스팅)
+- run: pnpm --filter @company/ui build-storybook -o dist-storybook
+- uses: actions/upload-pages-artifact@v3  with: { path: packages/ui/dist-storybook }
+# 토큰 문서도 스토리로: Colors.mdx 에서 tokens.ts 를 읽어 스와치 표 렌더 (32회차)
+`,
+        },
+      ],
+    },
+    {
+      id: 'vue-36', no: 36, name: `단위 테스트 심화 (Vitest, Testing Library)`,
+      lead: `무엇을 단위로 테스트하고 무엇을 하지 않을지, 컴포저블·스토어·비동기·Nuxt 전용 API 를 어떻게 다룰지의 습관입니다. 구현이 아니라 동작을 검사하고, 느린 테스트를 만들지 않습니다.`,
+      lessons: [
+        {
+          id: 'l1', short: `대상`,
+          title: `분기가 있는 컴포저블·유틸·복잡한 컴포넌트만 단위로. 통과만 하는 컴포넌트는 안 쓴다`,
+          why: `props 를 받아 그대로 그리는 컴포넌트의 테스트는 템플릿을 두 번 적는 것입니다. 가치는 조건이 있는 곳에 있습니다. 가격 계산, 권한 분기, 폼 검증, 재시도 로직, 날짜 포맷. 그 외는 스토리(35회차) 와 E2E(21회차) 가 더 싸게 덮습니다.`,
+          bad: String.raw`
+it('renders title', () => {
+  const w = mount(Card, { props: { title: 'A' } })
+  expect(w.text()).toContain('A')              // 템플릿 재진술
+})
+`,
+          good: String.raw`
+// 분기가 있는 것
+it('회원 등급별 할인: VIP 는 10%, 쿠폰과 중복 불가', () => {
+  expect(calcDiscount({ grade: 'vip', coupon: null, total: 10000 })).toBe(1000)
+  expect(calcDiscount({ grade: 'vip', coupon: { amount: 500 }, total: 10000 })).toBe(1000)
+})
+it('재고 0 이면 담기 버튼이 비활성', async () => {
+  render(ProductCard, { props: { product: { stock: 0 } } })
+  expect(screen.getByRole('button', { name: '담기' })).toBeDisabled()
+})
+`,
+        },
+        {
+          id: 'l2', short: `동작`,
+          title: `Testing Library 로 사용자가 보는 것(역할·텍스트) 을 검사하고 wrapper.vm 을 만지지 않는다`,
+          why: `wrapper.vm.count 나 wrapper.find('.btn-primary') 는 내부 이름과 클래스에 묶여 리팩터링마다 깨집니다. getByRole('button', { name }) 은 접근성 트리를 보므로 구현이 바뀌어도 살아남고, 접근성 결함도 드러냅니다(21회차 셀렉터와 같은 원칙).`,
+          bad: String.raw`
+const w = mount(Counter)
+await w.find('.btn-plus').trigger('click')
+expect(w.vm.count).toBe(1)                   // 내부 상태
+expect(w.find('.count').text()).toBe('1')     // 클래스
+`,
+          good: String.raw`
+import { render, screen } from '@testing-library/vue'
+import userEvent from '@testing-library/user-event'
+
+it('더하기를 누르면 1 이 된다', async () => {
+  render(Counter)
+  await userEvent.click(screen.getByRole('button', { name: '더하기' }))
+  expect(screen.getByText('1')).toBeInTheDocument()
+})
+// emit 검사가 필요할 때만 @vue/test-utils 의 wrapper.emitted() — 그것도 "사용자 행동 → 이벤트" 로
+`,
+        },
+        {
+          id: 'l3', short: `컴포저블`,
+          title: `컴포저블은 effectScope 안에서 직접 호출해 테스트하고, 라이프사이클이 필요하면 헬퍼 컴포넌트에 마운트한다`,
+          why: `컴포저블을 테스트하려고 더미 컴포넌트를 매번 만들면 장황합니다. 반응형만 쓰는 컴포저블은 effectScope().run() 으로 충분하고, onMounted·inject 를 쓰는 것만 withSetup 헬퍼로 마운트합니다. 두 헬퍼를 test/utils 에 둡니다.`,
+          bad: String.raw`
+const C = defineComponent({ setup() { return useCounter() }, template: '<div/>' })
+const w = mount(C); w.vm.inc(); expect(w.vm.count).toBe(1)     // 매 테스트마다 더미 컴포넌트
+`,
+          good: String.raw`
+// test/utils.ts
+export function withSetup<T>(composable: () => T, provide: Record<string | symbol, unknown> = {}) {
+  let result!: T
+  const app = createApp({ setup() { result = composable(); return () => null } })
+  for (const [k, v] of Object.entries(provide)) app.provide(k, v)
+  app.mount(document.createElement('div'))
+  return { result, app }
+}
+
+// 반응형만
+it('useCounter', () => {
+  const scope = effectScope()
+  const { count, inc } = scope.run(() => useCounter())!
+  inc(); expect(count.value).toBe(1)
+  scope.stop()
+})
+// 라이프사이클·inject
+it('useTheme 는 provide 된 기본값을 쓴다', () => {
+  const { result, app } = withSetup(() => useTheme(), { theme: 'dark' })
+  expect(result.theme.value).toBe('dark'); app.unmount()
+})
+`,
+        },
+        {
+          id: 'l4', short: `Pinia`,
+          title: `createTestingPinia 로 스토어를 넣고, 액션은 stub 한 채 호출 여부만 본다`,
+          why: `컴포넌트 테스트에서 실제 스토어 액션이 돌면 fetch 까지 따라옵니다. 테스트용 Pinia 는 액션을 자동으로 vi.fn 으로 바꾸고 initialState 로 원하는 상태를 바로 만듭니다. 스토어 자체의 로직은 스토어 테스트에서 실제 Pinia 로 따로 봅니다.`,
+          bad: String.raw`
+render(Cart)                       // 진짜 스토어 → 진짜 fetch → 네트워크 오류
+`,
+          good: String.raw`
+import { createTestingPinia } from '@pinia/testing'
+
+it('비어 있으면 결제 버튼이 없다', () => {
+  render(Cart, { global: { plugins: [createTestingPinia({ initialState: { cart: { items: [] } } })] } })
+  expect(screen.queryByRole('button', { name: '결제' })).not.toBeInTheDocument()
+})
+it('결제를 누르면 checkout 액션을 부른다', async () => {
+  render(Cart, { global: { plugins: [createTestingPinia({ initialState: { cart: { items: [{ id: 'a', qty: 1 }] } }, stubActions: true })] } })
+  const cart = useCartStore()
+  await userEvent.click(screen.getByRole('button', { name: '결제' }))
+  expect(cart.checkout).toHaveBeenCalledOnce()
+})
+// 스토어 로직: setActivePinia(createPinia()) 로 실제 스토어, $fetch 만 모킹 (l6)
+`,
+        },
+        {
+          id: 'l5', short: `비동기`,
+          title: `findBy* 와 flushPromises 로 기다리고, 디바운스는 가짜 타이머로 당긴다. 실제 시간을 기다리지 않는다`,
+          why: `await new Promise(r => setTimeout(r, 500)) 은 테스트를 느리게 하고 CI 에서 플래키해집니다. DOM 변화는 findByText 가 폴링하고, Promise 체인은 flushPromises 가 비우며, 시간 의존 로직은 vi.useFakeTimers 로 즉시 진행합니다.`,
+          bad: String.raw`
+await userEvent.type(input, 'abc')
+await new Promise(r => setTimeout(r, 600))      // 디바운스 500ms 기다림
+expect(search).toHaveBeenCalled()
+`,
+          good: String.raw`
+// DOM 이 바뀔 때까지
+await userEvent.click(screen.getByRole('button', { name: '불러오기' }))
+expect(await screen.findByText('주문 3건')).toBeInTheDocument()     // 기본 1초 폴링
+
+// 디바운스
+beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }))
+afterEach(() => vi.useRealTimers())
+it('입력 500ms 뒤 한 번만 검색', async () => {
+  const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+  render(Search, { props: { onSearch } })
+  await user.type(screen.getByRole('searchbox'), 'abc')
+  expect(onSearch).not.toHaveBeenCalled()
+  vi.advanceTimersByTime(500)
+  expect(onSearch).toHaveBeenCalledWith('abc')
+})
+`,
+        },
+        {
+          id: 'l6', short: `모킹 범위`,
+          title: `모듈 모킹은 최소로. 네트워크는 MSW 로 경계에서 막는다`,
+          why: `vi.mock 으로 내부 모듈을 갈아 끼우면 테스트가 구현 구조에 묶입니다. 바깥 경계(HTTP) 에서 막으면 내부를 어떻게 리팩터링해도 테스트가 그대로입니다. MSW 핸들러는 E2E(21회차) 와도 공유할 수 있습니다.`,
+          bad: String.raw`
+vi.mock('~/composables/useOrders', () => ({ useOrders: () => ({ orders: ref([...]) }) }))   // 내부 모듈 교체
+vi.mock('~/utils/format')                                                                    // 왜?
+`,
+          good: String.raw`
+// test/msw.ts
+import { setupServer } from 'msw/node'
+import { http, HttpResponse } from 'msw'
+export const server = setupServer(
+  http.get('/api/orders', () => HttpResponse.json([{ id: 'o1', total: 1000 }])),
+)
+// vitest.setup.ts
+beforeAll(() => server.listen({ onUnhandledRequest: 'error' }))   // 안 막은 요청은 실패
+afterEach(() => server.resetHandlers())
+afterAll(() => server.close())
+
+// 테스트에서 케이스별 덮어쓰기
+server.use(http.get('/api/orders', () => HttpResponse.json({ message: 'boom' }, { status: 500 })))
+render(Orders)
+expect(await screen.findByRole('alert')).toHaveTextContent('불러오지 못했습니다')
+`,
+        },
+        {
+          id: 'l7', short: `Nuxt`,
+          title: `Nuxt 전용 API 는 @nuxt/test-utils 의 mountSuspended, mockNuxtImport, registerEndpoint 로 다룬다`,
+          why: `useFetch, useRoute, useRuntimeConfig 는 Nuxt 런타임이 있어야 동작합니다. 일반 vitest 환경에서 mount 하면 전부 undefined 입니다. nuxt 환경(environment: 'nuxt') 에서 mountSuspended 로 마운트하고, 자동 import 는 mockNuxtImport 로, 서버 라우트는 registerEndpoint 로 대체합니다.`,
+          bad: String.raw`
+mount(OrdersPage)        // useFetch is not defined / inject() can only be used inside setup
+`,
+          good: String.raw`
+// vitest.config.ts
+import { defineVitestConfig } from '@nuxt/test-utils/config'
+export default defineVitestConfig({ test: { environment: 'nuxt' } })   // 또는 파일 상단 // @vitest-environment nuxt
+
+// orders.test.ts
+import { mountSuspended, mockNuxtImport, registerEndpoint } from '@nuxt/test-utils/runtime'
+registerEndpoint('/api/orders', () => [{ id: 'o1', total: 1000 }])
+mockNuxtImport('useRoute', () => () => ({ query: { page: '2' } }))
+
+it('2페이지 주문을 그린다', async () => {
+  const w = await mountSuspended(OrdersPage)           // useFetch 가 끝날 때까지 기다린다
+  expect(w.text()).toContain('1,000원')
+})
+// 컴포넌트가 Nuxt 에 안 기대면(순수 Vue) 일반 환경이 훨씬 빠르다 — 파일 단위로 환경을 고른다
+`,
+        },
+        {
+          id: 'l8', short: `스냅샷`,
+          title: `큰 DOM 스냅샷은 금지. 인라인 스냅샷은 작은 값에만 쓴다`,
+          why: `200줄 HTML 스냅샷은 아무도 읽지 않고 -u 로 갱신만 합니다. 그건 테스트가 아니라 "변했다" 알림입니다. 포맷 함수 결과, 변환된 객체처럼 한눈에 들어오는 값만 toMatchInlineSnapshot 으로 코드 옆에 둡니다.`,
+          bad: String.raw`
+expect(wrapper.html()).toMatchSnapshot()        // __snapshots__/Orders.test.ts.snap 300줄
+`,
+          good: String.raw`
+expect(formatMoney(1234567)).toMatchInlineSnapshot(\`"1,234,567원"\`)
+expect(toQuery({ page: 2, sort: ['-createdAt'], q: '' })).toMatchInlineSnapshot(\`
+  {
+    "page": "2",
+    "sort": "-createdAt",
+  }
+\`)
+// DOM 은 역할·텍스트로 단언 (l2). 레이아웃은 시각 회귀 (35회차)
+`,
+        },
+        {
+          id: 'l9', short: `구조`,
+          title: `테스트 하나에 행동 하나. 이름은 문장, 반복은 test.each`,
+          why: `한 테스트에 열 가지를 단언하면 첫 실패에서 멈춰 나머지를 모릅니다. 이름이 'works' 면 실패 로그가 아무것도 말해 주지 않습니다. 경계값 묶음은 test.each 표로 적으면 케이스 추가가 한 줄입니다.`,
+          bad: String.raw`
+it('works', () => {
+  expect(parse('1')).toBe(1); expect(parse('')).toBe(0); expect(parse('x')).toBeNaN(); expect(parse('1,000')).toBe(1000) ...
+})
+`,
+          good: String.raw`
+describe('parseAmount', () => {
+  test.each([
+    ['1', 1], ['1,000', 1000], ['', 0], [' 12 ', 12], ['-5', 0],
+  ])('%s → %s', (input, expected) => { expect(parseAmount(input)).toBe(expected) })
+  it('숫자가 아니면 오류를 던진다', () => { expect(() => parseAmount('x')).toThrow('금액') })
+})
+// describe 는 대상 하나, 중첩은 두 단계까지. beforeEach 에 공유 상태를 쌓지 말고 팩토리 함수로 매번 새로 만든다
+`,
+        },
+        {
+          id: 'l10', short: `속도`,
+          title: `커버리지 숫자를 목표로 삼지 않는다. 바뀐 파일만 돌리고 느린 테스트를 추적한다`,
+          why: `"80% 이상" 목표는 템플릿 재진술 테스트(l1) 를 양산합니다. 커버리지는 "분기가 있는데 테스트가 없는 곳" 을 찾는 도구로만 씁니다. 속도는 격리 수준과 환경 선택이 결정합니다. 20초 넘는 스위트는 개발자가 안 돌리게 됩니다.`,
+          bad: String.raw`
+# CI: coverage 80% 미만이면 실패 → 의미 없는 테스트로 숫자 채우기
+# 로컬: 전체 스위트 2분 → 아무도 안 돌림
+`,
+          good: String.raw`
+// vitest.config.ts
+test: {
+  coverage: { provider: 'v8', include: ['src/**'], exclude: ['**/*.stories.*', '**/*.d.ts'], thresholds: { perFile: false } },  // 보고만
+  isolate: false,                       // 파일 간 격리 끄면 2~3배 빠름 (전역을 더럽히는 테스트가 없을 때)
+  pool: 'threads',
+  slowTestThreshold: 300,               // 300ms 넘는 테스트는 리포트에 표시
+}
+# 로컬: 바뀐 것만
+vitest --changed origin/main
+# CI: 변경 파일 커버리지만 PR 코멘트 (vitest-coverage-report-action 등), 전역 임계치 없음
+# 리뷰 체크(39회차): "분기 추가했는데 테스트 없음" 은 커버리지 diff 가 알려 준다
+`,
+        },
+      ],
+    },
+    {
+      id: 'vue-37', no: 37, name: `Nuxt 서버 심화 (Nitro 스토리지, 태스크, 캐시)`,
+      lead: `server/ 디렉터리가 커질 때의 습관입니다. 스토리지는 드라이버로 바꾸고, 캐시는 키와 수명을 설계하고, 정기 작업은 태스크로 두고, 핸들러는 얇게 유지합니다. 어느 프리셋(Node, 엣지) 으로 배포해도 같은 코드가 돌게 합니다.`,
+      lessons: [
+        {
+          id: 'l1', short: `스토리지`,
+          title: `파일·캐시·세션은 useStorage 로 접근하고, 드라이버는 환경이 정한다`,
+          why: `fs.writeFile('/tmp/...') 은 서버리스·엣지에서 없거나 매 요청 사라집니다. Nitro 스토리지는 같은 코드로 개발은 파일, 운영은 Redis·S3 를 씁니다. 마운트 이름이 경계이고, 핸들러는 어디 저장되는지 모릅니다.`,
+          bad: String.raw`
+import { writeFile, readFile } from 'node:fs/promises'
+await writeFile('./data/session-' + id + '.json', JSON.stringify(s))     // 컨테이너 재시작 → 사라짐, 엣지 → 오류
+`,
+          good: String.raw`
+// nuxt.config.ts
+nitro: {
+  storage:    { sessions: { driver: 'redis', url: process.env.REDIS_URL }, uploads: { driver: 's3', bucket: 'app-uploads' } },
+  devStorage: { sessions: { driver: 'fs', base: './.data/sessions' },     uploads: { driver: 'fs', base: './.data/uploads' } },
+}
+// server/utils/session.ts — 마운트 이름만 안다
+export const sessions = () => useStorage<Session>('sessions')
+await sessions().setItem(id, session, { ttl: 60 * 60 * 24 })
+const s = await sessions().getItem(id)
+// 기본 제공 마운트: useStorage('cache') (defineCachedHandler 가 쓰는 곳), useStorage('assets:server') (server/assets 읽기 전용)
+`,
+        },
+        {
+          id: 'l2', short: `캐시 핸들러`,
+          title: `공용 데이터는 defineCachedEventHandler, 함수 단위는 defineCachedFunction. 사용자별 데이터는 키에 사용자를 넣거나 캐시하지 않는다`,
+          why: `상품 목록을 매 요청 DB 에서 읽을 이유가 없습니다. 캐시 핸들러는 결과를 스토리지에 두고 maxAge 동안 재사용하며 staleMaxAge 로 "낡은 것 주고 뒤에서 갱신" 도 됩니다. 반대로 /api/me 를 캐시하면 남의 데이터가 보입니다. 키 설계가 전부입니다.`,
+          bad: String.raw`
+export default defineCachedEventHandler(async (e) => {
+  const user = await requireUser(e)
+  return db.orders.findMany({ where: { userId: user.id } })     // 첫 사용자의 주문이 모두에게
+}, { maxAge: 60 })
+`,
+          good: String.raw`
+// 공용: 키는 경로+쿼리 기본값으로 충분
+export default defineCachedEventHandler(async (e) => db.products.findMany({ where: { live: true } }),
+  { maxAge: 60, staleMaxAge: 600, swr: true, name: 'products', getKey: (e) => getQuery(e).category?.toString() ?? 'all' })
+
+// 사용자별이지만 비싼 것: 키에 사용자 id
+export default defineCachedEventHandler(async (e) => buildDashboard(e.context.user.id),
+  { maxAge: 30, getKey: (e) => 'dash:' + e.context.user.id, varies: [] })
+
+// 함수 단위
+const getRates = defineCachedFunction(async (base: string) => $fetch('https://api.rates/' + base),
+  { maxAge: 3600, name: 'rates', getKey: (base) => base })
+// 주의: 캐시 핸들러는 응답 헤더(Set-Cookie) 를 같이 굳힌다 → 인증·쿠키를 건드리는 핸들러는 캐시 금지
+`,
+        },
+        {
+          id: 'l3', short: `routeRules`,
+          title: `페이지 캐시는 routeRules 로: prerender, isr, swr, cache 의 차이를 알고 고른다`,
+          why: `네 가지는 "언제 누가 다시 만드는가" 가 다릅니다. prerender 는 빌드 때 한 번, swr 은 Nitro 가 수명 뒤 백그라운드 재생성, isr 은 CDN(Vercel/Netlify) 레벨의 같은 동작, cache 는 세부 옵션 직접 지정입니다. 플랫폼이 isr 을 지원하지 않으면 swr 로 떨어집니다.`,
+          bad: String.raw`
+routeRules: { '/**': { swr: 3600 } }         // 로그인 페이지·마이페이지까지 1시간 캐시
+`,
+          good: String.raw`
+routeRules: {
+  '/':            { prerender: true },                 // 빌드 때 생성, CDN 에서 서빙
+  '/about':       { prerender: true },
+  '/blog/**':     { isr: 3600 },                        // 플랫폼 ISR (없으면 swr 로 동작)
+  '/products/**': { swr: 300 },                         // 5분 지나면 낡은 것 주고 뒤에서 재생성
+  '/search':      { cache: { maxAge: 60, varies: ['accept-language'] } },
+  '/me/**':       { ssr: true, cache: false, headers: { 'cache-control': 'private, no-store' } },
+  '/admin/**':    { ssr: false },                       // SPA
+  '/api/public/**': { cors: true, headers: { 'cache-control': 'public, max-age=60' } },
+}
+// 검사: 캐시되는 라우트는 쿠키·사용자별 분기가 없는지 (23회차 l9 와 같은 원칙)
+`,
+        },
+        {
+          id: 'l4', short: `무효화`,
+          title: `캐시 키에 이름 접두사를 두고, 데이터가 바뀌면 그 키를 지운다. 수명만 믿지 않는다`,
+          why: `상품을 수정했는데 5분 동안 옛 값이 보이면 운영팀이 "저장 안 됐다" 고 합니다. 캐시 항목은 cache:<name>:<key> 로 저장되므로 쓰기 핸들러에서 같은 키를 지우면 즉시 반영됩니다. name 을 명시하지 않으면 키가 함수 해시라 못 지웁니다.`,
+          bad: String.raw`
+// 수정 API 는 DB 만 바꾸고 끝. "5분 기다리세요"
+`,
+          good: String.raw`
+// server/utils/cache.ts
+export async function invalidate(name: string, key?: string) {
+  const cache = useStorage('cache')
+  if (key) return cache.removeItem('nitro:handlers:' + name + ':' + key + '.json')
+  const keys = await cache.getKeys('nitro:handlers:' + name)
+  await Promise.all(keys.map(k => cache.removeItem(k)))
+}
+// defineCachedFunction 은 'nitro:functions:' + name, 키 형식은 Nitro 버전마다 다를 수 있으니 getKeys 로 확인 후 접두사 상수로
+
+// server/api/products/[id].put.ts
+await db.products.update(...)
+await invalidate('products')                       // 목록 전체
+await invalidate('product', id)                    // 상세 하나
+// 다중 인스턴스면 캐시 스토리지가 Redis 처럼 공유되어야 지우기가 전부에 반영된다 (l1)
+`,
+        },
+        {
+          id: 'l5', short: `태스크`,
+          title: `정기 작업은 Nitro 태스크로 정의하고, 중복 실행은 락으로 막는다`,
+          why: `setInterval 을 서버 플러그인에 두면 인스턴스가 3개일 때 3번 돕니다. Nitro 태스크는 이름으로 정의하고 scheduledTasks 로 크론을 걸거나 /_nitro/tasks 로 수동 실행합니다. 그래도 다중 인스턴스 중복은 막아 주지 않으니 스토리지 락을 겁니다.`,
+          bad: String.raw`
+// server/plugins/cron.ts
+setInterval(() => cleanupExpired(), 60_000)     // 인스턴스 수만큼 실행, 종료 시 정리 없음
+`,
+          good: String.raw`
+// nuxt.config.ts
+nitro: { experimental: { tasks: true }, scheduledTasks: { '*/10 * * * *': ['cleanup:sessions'], '0 3 * * *': ['report:daily'] } }
+
+// server/tasks/cleanup/sessions.ts
+export default defineTask({
+  meta: { name: 'cleanup:sessions', description: '만료 세션 삭제' },
+  async run() {
+    const lock = useStorage('cache')
+    const key = 'lock:cleanup:sessions'
+    if (await lock.hasItem(key)) return { result: 'skipped' }
+    await lock.setItem(key, Date.now(), { ttl: 540 })          // 9분 — 주기보다 짧게
+    try { const n = await deleteExpiredSessions(); return { result: n } }
+    finally { await lock.removeItem(key) }
+  },
+})
+// 수동: await runTask('cleanup:sessions')  또는 dev 에서 GET /_nitro/tasks/cleanup:sessions
+// 서버리스·엣지 프리셋은 크론이 없다 → 플랫폼 스케줄러(Vercel Cron, Cloudflare Cron Trigger) 가 태스크 엔드포인트를 호출
+`,
+        },
+        {
+          id: 'l6', short: `훅`,
+          title: `서버 플러그인에서 Nitro 훅으로 요청·오류·종료를 가로채고, 종료 시 연결을 정리한다`,
+          why: `요청마다 로깅, 오류 공통 처리, SIGTERM 때 DB 연결 닫기는 핸들러 안이 아니라 플러그인의 훅에 둡니다. close 훅을 빼먹으면 롤링 배포 때 진행 중 쿼리가 끊기거나 커넥션이 새어 DB 가 한계에 닿습니다.`,
+          bad: String.raw`
+// 각 핸들러에서 console.log(event.path) / try-catch 복사. 종료 처리 없음
+`,
+          good: String.raw`
+// server/plugins/lifecycle.ts
+export default defineNitroPlugin((nitro) => {
+  nitro.hooks.hook('request', (event) => {
+    event.context.requestId = getHeader(event, 'x-request-id') ?? crypto.randomUUID()
+    event.context.startedAt = performance.now()
+  })
+  nitro.hooks.hook('afterResponse', (event) => {
+    logger.info({ reqId: event.context.requestId, path: event.path, ms: Math.round(performance.now() - event.context.startedAt) })
+  })
+  nitro.hooks.hook('error', (error, { event }) => {
+    if ((error as any).statusCode >= 500) captureException(error, { reqId: event?.context.requestId })   // 27회차
+  })
+  nitro.hooks.hookOnce('close', async () => {
+    await db.$disconnect(); await redis.quit(); logger.info('shutdown complete')
+  })
+})
+`,
+        },
+        {
+          id: 'l7', short: `계층`,
+          title: `핸들러는 파싱·인증·응답만. 비즈니스 로직은 server/services 로 내린다`,
+          why: `핸들러 안에 트랜잭션·계산·외부 호출이 다 들어가면 태스크나 다른 핸들러에서 재사용할 수 없고 테스트도 HTTP 를 거쳐야 합니다. 서비스 함수는 입력 타입을 받아 결과를 돌려주는 순수한 모듈이고, 핸들러는 그 함수를 20줄 안에서 부릅니다.`,
+          bad: String.raw`
+// server/api/orders.post.ts 180줄: readBody, 검증, 재고 확인, 가격 계산, 트랜잭션, 결제 호출, 메일, 응답
+`,
+          good: String.raw`
+// server/services/orders.ts — HTTP 를 모른다
+export async function placeOrder(input: PlaceOrderInput, actor: { userId: string }) {
+  return db.$transaction(async (tx) => {
+    await assertStock(tx, input.items)
+    const total = calcTotal(input.items, await getPricing(tx))
+    const order = await tx.order.create({ data: { ...input, total, userId: actor.userId } })
+    await queue.add('order:placed', { orderId: order.id })         // 메일·결제 후속은 큐로
+    return order
+  })
+}
+// server/api/orders.post.ts — 얇게
+export default defineEventHandler(async (event) => {
+  const user = await requireUser(event)
+  const input = await readValidatedBody(event, placeOrderSchema.parse)
+  const order = await placeOrder(input, { userId: user.id })
+  setResponseStatus(event, 201)
+  return order
+})
+// server/utils 는 auto-import 되므로 "유틸" 이름의 함수만, 서비스는 명시 import 로 경계를 보이게
+`,
+        },
+        {
+          id: 'l8', short: `연결`,
+          title: `DB 클라이언트는 모듈 범위 싱글턴. dev HMR 중복은 globalThis 로, 서버리스는 풀링 엔드포인트로`,
+          why: `핸들러 안에서 new PrismaClient() 를 만들면 요청마다 커넥션이 늘어 DB 가 죽습니다. 모듈 범위에 하나 두되, Nuxt dev 는 HMR 때 모듈을 다시 평가하므로 globalThis 에 보관합니다. 서버리스는 인스턴스마다 하나씩 생기므로 풀러(PgBouncer, Neon pooler, Prisma Accelerate) 를 앞에 둡니다.`,
+          bad: String.raw`
+export default defineEventHandler(async () => {
+  const prisma = new PrismaClient()                 // 요청마다 새 연결
+  return prisma.user.findMany()
+})
+`,
+          good: String.raw`
+// server/utils/db.ts
+import { PrismaClient } from '@prisma/client'
+const g = globalThis as unknown as { __prisma?: PrismaClient }
+export const db = g.__prisma ?? new PrismaClient({ log: import.meta.dev ? ['warn', 'error'] : ['error'] })
+if (import.meta.dev) g.__prisma = db                   // HMR 로 모듈이 다시 평가돼도 하나
+
+// 서버리스: DATABASE_URL 을 풀러 주소로 (pgbouncer=true 또는 Neon 의 -pooler 호스트), connection_limit 작게
+// 엣지(Cloudflare/Vercel Edge): TCP 불가 → HTTP 드라이버 (@neondatabase/serverless, PlanetScale serverless, Turso)
+`,
+        },
+        {
+          id: 'l9', short: `스트림`,
+          title: `큰 응답과 파일은 메모리에 올리지 않고 스트림으로 흘려보낸다`,
+          why: `100MB 파일을 Buffer 로 읽어 return 하면 요청 몇 개에 메모리가 터집니다. 스토리지·S3·외부 API 응답은 ReadableStream 그대로 넘기고, 프록시는 sendProxy 로 헤더까지 넘깁니다. 긴 생성 작업은 SSE 로 진행률을 흘립니다(24회차).`,
+          bad: String.raw`
+export default defineEventHandler(async (e) => {
+  const buf = await readFile('/data/export.csv')        // 전부 메모리
+  return buf
+})
+`,
+          good: String.raw`
+// 파일 → 스트림
+import { createReadStream } from 'node:fs'
+export default defineEventHandler((e) => {
+  setHeader(e, 'content-type', 'text/csv'); setHeader(e, 'content-disposition', 'attachment; filename="export.csv"')
+  return sendStream(e, createReadStream('/data/export.csv'))
+})
+// S3 / 외부 URL 은 프록시
+export default defineEventHandler((e) => sendProxy(e, signedUrl, { headers: { 'cache-control': 'private, max-age=60' } }))
+// DB 커서 → CSV 스트림
+export default defineEventHandler((e) => {
+  const stream = new ReadableStream({
+    async start(ctrl) {
+      ctrl.enqueue('id,total\n')
+      for await (const row of iterateOrders()) ctrl.enqueue(row.id + ',' + row.total + '\n')
+      ctrl.close()
+    },
+  })
+  setHeader(e, 'content-type', 'text/csv'); return stream
+})
+`,
+        },
+        {
+          id: 'l10', short: `프리셋`,
+          title: `runtimeConfig 로 비밀을 넣고, 프리셋(Node, 서버리스, 엣지) 의 제약을 코드가 가정하지 않게 한다`,
+          why: `process.env 를 핸들러에서 직접 읽으면 엣지에서 비어 있고, 빌드 시점에 굳어 버릴 수도 있습니다. runtimeConfig 는 NUXT_ 환경변수로 런타임에 덮이고 서버 전용 키는 클라이언트에 안 나갑니다. 또 fs·child_process·장기 setTimeout 은 엣지에 없으니 그 가정은 l1·l5·l9 의 추상화 뒤에 둡니다.`,
+          bad: String.raw`
+const key = process.env.STRIPE_SECRET            // 엣지: undefined, 빌드 때 inline 될 수도
+export default defineEventHandler(() => fetch('https://api.stripe.com', { headers: { Authorization: 'Bearer ' + key } }))
+`,
+          good: String.raw`
+// nuxt.config.ts
+runtimeConfig: {
+  stripeSecret: '',                    // NUXT_STRIPE_SECRET 로 주입. 서버 전용
+  public: { apiBase: '/api' },         // NUXT_PUBLIC_API_BASE. 클라이언트 노출
+}
+// 핸들러
+export default defineEventHandler((event) => {
+  const { stripeSecret } = useRuntimeConfig(event)
+  ...
+})
+// 프리셋별 점검표
+// - node-server: 전부 가능. 프로세스 종료 훅(l6) 필수
+// - vercel / netlify / aws-lambda: 인스턴스 수명 짧음 → 메모리 캐시 금지(l1 스토리지), 크론은 플랫폼(l5), DB 는 풀러(l8)
+// - cloudflare / vercel-edge: Node API 없음 → fs·net 금지, 번들 크기 제한, HTTP DB 드라이버(l8), 1MB 응답 제한 확인
+// nitro.preset 은 CI 환경변수(NITRO_PRESET) 로 바꾸고, 로컬에서 같은 프리셋으로 한 번 빌드해 본다
+`,
+        },
+      ],
+    },
+    {
+      id: 'vue-38', no: 38, name: `배포 전략 (Docker, 엣지, 프리뷰 환경)`,
+      lead: `어디에 어떻게 올릴지를 코드와 같은 저장소에서 결정하는 습관입니다. 렌더 방식으로 대상을 고르고, 이미지는 한 번 만들어 모든 환경에 쓰고, PR 마다 프리뷰를 띄우고, 되돌리기를 먼저 준비합니다.`,
+      lessons: [
+        {
+          id: 'l1', short: `대상`,
+          title: `SSR 이 필요한지부터 묻는다. 정적이면 CDN, SSR 이면 Node 컨테이너, 전 세계 지연이 문제면 엣지`,
+          why: `블로그·랜딩·문서는 generate 로 정적 파일이 되어 CDN 에 올리면 서버가 없습니다. 로그인 뒤 개인화 화면이 많으면 SSR 서버가 필요합니다. 엣지는 빠르지만 제약(37회차 l10) 이 있으니 "필요한 지연 요구" 가 있을 때만 고릅니다.`,
+          bad: String.raw`
+# 문서 사이트를 k8s 에 SSR 로 배포. 서버 비용 + 운영 + 새벽 알림
+`,
+          good: String.raw`
+# 결정표
+# 로그인 없음, 콘텐츠 위주         → nuxt generate → S3/CloudFront, Cloudflare Pages, GitHub Pages
+# 일부 동적 (댓글, 검색)             → generate + 클라이언트 fetch, 또는 hybrid (routeRules prerender + 일부 SSR)
+# 개인화 SSR, 내부망 DB              → Docker (node-server 프리셋) → ECS/k8s/Fly/Railway
+# 전 세계 사용자, SSR 가볍고 DB 가 HTTP → 엣지 프리셋 (cloudflare-pages, vercel-edge)
+# 팀이 작고 운영 인력 없음           → Vercel/Netlify 같은 관리형. 프리셋 자동
+# nuxt.config: nitro.preset 은 환경변수로 (NITRO_PRESET=node-server), 코드는 프리셋을 모른다
+`,
+        },
+        {
+          id: 'l2', short: `Dockerfile`,
+          title: `멀티 스테이지로 빌드하고, 런타임 이미지에는 .output 만 넣고, root 로 실행하지 않는다`,
+          why: `소스·node_modules·devDependencies 가 든 1GB 이미지는 느리고 공격면도 넓습니다. Nuxt 빌드 결과 .output 은 의존성까지 번들된 독립 폴더라 그것만 복사하면 100MB 대가 됩니다. 비루트 사용자와 HEALTHCHECK 는 기본입니다.`,
+          bad: String.raw`
+FROM node:22
+COPY . .
+RUN npm install && npm run build
+CMD ["npm", "run", "start"]            # root, 1GB, dev 의존성 포함, npm 이 시그널을 가로챔
+`,
+          good: String.raw`
+# syntax=docker/dockerfile:1
+FROM node:22-alpine AS build
+WORKDIR /app
+RUN corepack enable
+COPY pnpm-lock.yaml package.json ./
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store pnpm fetch
+COPY . .
+RUN pnpm install --offline --frozen-lockfile && pnpm build       # → .output
+
+FROM node:22-alpine AS runtime
+WORKDIR /app
+ENV NODE_ENV=production NITRO_PORT=3000 NITRO_HOST=0.0.0.0
+COPY --from=build --chown=node:node /app/.output ./.output
+USER node
+EXPOSE 3000
+HEALTHCHECK --interval=15s --timeout=3s --start-period=10s CMD wget -qO- http://127.0.0.1:3000/api/health || exit 1
+CMD ["node", ".output/server/index.mjs"]        # npm 거치지 않고 직접 → SIGTERM 이 바로 전달
+`,
+        },
+        {
+          id: 'l3', short: `환경 변수`,
+          title: `이미지는 하나, 환경은 런타임 변수로. 빌드 시점에 굳는 값을 알고 구분한다`,
+          why: `스테이징·운영마다 이미지를 따로 빌드하면 "운영에만 있는 버그" 가 생깁니다. Nuxt 의 runtimeConfig 는 NUXT_ 변수로 런타임에 덮이므로 같은 이미지를 어디든 띄웁니다. 단, import.meta.env.VITE_* 와 app.baseURL 은 빌드 때 굳으니 환경별로 달라선 안 됩니다.`,
+          bad: String.raw`
+# Dockerfile: ARG API_BASE  RUN API_BASE=$API_BASE pnpm build    → 환경마다 이미지, 운영 이미지는 테스트 안 됨
+`,
+          good: String.raw`
+# 한 이미지. 배포 시 변수만
+docker run -e NUXT_PUBLIC_API_BASE=https://api.example.com -e NUXT_STRIPE_SECRET=sk_live_... app:1.4.2
+
+# 런타임에 바뀌어도 되는 것: runtimeConfig (서버·public 모두)
+# 빌드 때 굳는 것: app.baseURL, nitro.preset, routeRules, VITE_* → 모든 환경에서 같게 두거나, 다르면 "환경이 아니라 다른 앱" 으로 본다
+# 검증: 스테이징 이미지의 digest 와 운영 이미지의 digest 가 같은지 배포 파이프라인이 확인
+`,
+        },
+        {
+          id: 'l4', short: `헬스체크`,
+          title: `/api/health 는 살아있음과 준비됨을 나누고, SIGTERM 에 진행 중 요청을 마친 뒤 끝낸다`,
+          why: `오케스트레이터는 두 질문을 합니다. "프로세스가 살아 있나" 와 "트래픽을 받아도 되나". DB 연결 전에 ready 를 true 로 주면 500 이 쏟아지고, 종료 신호에 즉시 죽으면 진행 중 요청이 끊깁니다. Nitro 는 close 훅을 주므로 거기서 정리합니다(37회차 l6).`,
+          bad: String.raw`
+export default defineEventHandler(() => 'ok')     // DB 가 죽어도 ok, 종료 처리 없음
+`,
+          good: String.raw`
+// server/api/health.get.ts — liveness: 프로세스만
+export default defineEventHandler(() => ({ status: 'ok', version: useRuntimeConfig().public.version }))
+// server/api/ready.get.ts — readiness: 의존성까지
+export default defineEventHandler(async (e) => {
+  try { await db.$queryRaw\`SELECT 1\`; await redis.ping() }
+  catch (err) { setResponseStatus(e, 503); return { status: 'not-ready', reason: String(err) } }
+  return { status: 'ready' }
+})
+// k8s: livenessProbe → /api/health, readinessProbe → /api/ready, terminationGracePeriodSeconds: 30
+// 종료: Nitro node-server 는 SIGTERM 에 새 연결을 멈추고 진행 중 요청을 기다린다 (NITRO_SHUTDOWN_TIMEOUT). close 훅에서 DB·큐 정리
+`,
+        },
+        {
+          id: 'l5', short: `프리뷰`,
+          title: `PR 마다 프리뷰 환경을 띄우고, 시드 데이터와 만료를 자동화한다`,
+          why: `"로컬에서는 됩니다" 를 없애는 가장 싼 방법입니다. 리뷰어·디자이너·기획이 링크를 클릭해 보고, E2E 도 그 URL 에 돌립니다. 관리형 플랫폼은 기본이고, 자체 인프라면 PR 번호를 네임스페이스로 씁니다. 안 지우면 비용이 쌓이니 머지·종료 시 삭제합니다.`,
+          bad: String.raw`
+# 스테이징 하나를 모두가 공유. "지금 누가 배포했어요?"
+`,
+          good: String.raw`
+# .github/workflows/preview.yml (자체 인프라 예)
+on: { pull_request: { types: [opened, synchronize, reopened, closed] } }
+jobs:
+  deploy:
+    if: github.event.action != 'closed'
+    steps:
+      - run: docker build -t registry/app:pr-\${{ github.event.number }} .
+      - run: helm upgrade --install pr-\${{ github.event.number }} ./chart --namespace previews
+             --set image.tag=pr-\${{ github.event.number }} --set host=pr-\${{ github.event.number }}.preview.example.com
+             --set seed=true                              # 시드 데이터 (실데이터 복사 금지)
+      - uses: marocchino/sticky-pull-request-comment@v2   # PR 에 URL 코멘트
+        with: { message: "Preview: https://pr-\${{ github.event.number }}.preview.example.com" }
+  cleanup:
+    if: github.event.action == 'closed'
+    steps: [ { run: helm uninstall pr-\${{ github.event.number }} -n previews } ]
+# 프리뷰는 robots: noindex + basic auth 또는 SSO 뒤에. 외부 결제·메일은 샌드박스 키
+`,
+        },
+        {
+          id: 'l6', short: `엣지`,
+          title: `엣지는 "가벼운 SSR + HTTP 로 닿는 데이터" 일 때만. 무거운 것은 리전 서버에 남긴다`,
+          why: `엣지 함수는 사용자 가까이서 돌지만 DB 가 한 리전에 있으면 왕복이 더 길어질 수 있습니다. 번들 크기 제한과 Node API 부재도 있습니다. 캐시 가능한 페이지, 지역화, 인증 검사 같은 얇은 일을 엣지에 두고, 트랜잭션·대용량은 리전 API 로 분리합니다.`,
+          bad: String.raw`
+# 전체 앱을 엣지로: Prisma(TCP) 불가, sharp 불가, 번들 5MB 초과, DB 는 서울인데 함수는 상파울루
+`,
+          good: String.raw`
+# 분리 배포
+# apps/web   → cloudflare-pages 프리셋 (SSR 얇음, KV/캐시, HTTP DB 드라이버)
+# apps/api   → node-server 컨테이너, DB 와 같은 리전 (무거운 처리, 트랜잭션, 이미지 처리)
+# web 의 routeRules: '/api/heavy/**': { proxy: 'https://api.internal.example.com/**' }
+
+# 엣지에서 할 만한 것: 지역별 리다이렉트, A/B 쿠키, 인증 토큰 검증(JWT 서명), 캐시된 페이지 조립, 봇 차단
+# 엣지에서 하지 말 것: 다단계 DB 트랜잭션, 큰 파일 처리, 10초 넘는 작업, Node 전용 라이브러리
+# 측정: 같은 페이지를 리전 서버와 엣지에 두고 실제 사용자 지역에서 TTFB 비교 (23회차 RUM)
+`,
+        },
+        {
+          id: 'l7', short: `무중단`,
+          title: `롤링 배포 중 옛 청크 요청이 404 되지 않게 이전 빌드 자산을 남기고, 청크 오류는 새로고침으로 복구한다`,
+          why: `사용자가 페이지를 열어 둔 채 새 버전이 배포되면 이전 해시의 JS 청크를 요청하는데, 새 컨테이너에는 없어 404 가 납니다. 자산을 CDN 에 올려 두 버전을 함께 두거나, 최소한 청크 로드 실패 시 한 번 새로고침하게 합니다. Nuxt 는 그 훅을 줍니다.`,
+          bad: String.raw`
+# 배포 → 컨테이너 교체 → 열려 있던 탭에서 라우트 이동 → "Failed to fetch dynamically imported module"
+`,
+          good: String.raw`
+// nuxt.config.ts
+experimental: { emitRouteChunkError: 'automatic' },   // 청크 로드 실패 시 자동 새로고침 (기본값 확인)
+app: { cdnURL: 'https://cdn.example.com/app/' },      // 자산은 CDN 에 — 배포 때 이전 빌드 폴더를 지우지 않는다 (N 버전 보관)
+
+// 세밀하게 제어하려면
+export default defineNuxtPlugin((nuxtApp) => {
+  nuxtApp.hook('app:chunkError', ({ error }) => {
+    if (sessionStorage.getItem('chunk-reloaded')) return      // 무한 루프 방지
+    sessionStorage.setItem('chunk-reloaded', '1'); reloadNuxtApp({ persistState: true })
+  })
+  nuxtApp.hook('app:mounted', () => sessionStorage.removeItem('chunk-reloaded'))
+})
+// 서버 측: 롤링 업데이트 maxUnavailable: 0, readiness 통과 후 트래픽, 세션은 외부(Redis) 에 (37회차 l1)
+`,
+        },
+        {
+          id: 'l8', short: `재현성`,
+          title: `Node 버전·락파일·빌드 환경을 고정해 어디서 빌드해도 같은 결과가 나오게 한다`,
+          why: `"CI 에서는 되는데 내 컴퓨터에선 안 돼요" 의 절반은 Node 버전, 나머지는 락파일 무시입니다. engines + .nvmrc + packageManager 필드로 버전을 적고, CI 는 --frozen-lockfile 로만 설치하며, 빌드는 Dockerfile 안에서만 합니다.`,
+          bad: String.raw`
+# 개발자 A: Node 18, B: Node 22, CI: latest. pnpm install 이 락파일을 조용히 갱신
+`,
+          good: String.raw`
+// package.json
+{ "engines": { "node": ">=22.11 <23" }, "packageManager": "pnpm@10.4.1" }
+# .npmrc
+engine-strict=true
+# .nvmrc / .node-version
+22.11.0
+
+# CI
+- uses: actions/setup-node@v4  with: { node-version-file: '.nvmrc', cache: 'pnpm' }
+- run: corepack enable && pnpm install --frozen-lockfile
+# Docker: FROM node:22.11-alpine (메이저만 적지 않는다). 빌드는 CI 와 Dockerfile 이 같은 명령 (pnpm build) 을 쓰고, 산출물은 이미지 하나 (l3)
+# 재현 검사: 같은 커밋을 두 번 빌드해 .output 의 해시 비교 (타임스탬프·랜덤 해시가 들어가면 그 지점을 제거)
+`,
+        },
+        {
+          id: 'l9', short: `되돌리기`,
+          title: `이미지 태그는 커밋 SHA, 롤백은 이전 태그 재배포. DB 변경은 앞뒤 버전이 공존하게 만든다`,
+          why: `롤백이 "이전 커밋을 다시 빌드" 면 10분이 걸리고 그 사이 빌드가 실패할 수도 있습니다. 이미 있는 이미지 태그로 되돌리면 30초입니다. 단 새 버전이 컬럼을 지웠으면 옛 코드가 못 돕니다. 스키마 변경은 확장(추가) → 코드 전환 → 수축(삭제) 세 배포로 나눕니다.`,
+          bad: String.raw`
+# 태그 latest 하나. 롤백 = git revert → CI 10분
+# 마이그레이션: ALTER TABLE users DROP COLUMN name 을 코드 변경과 같은 배포에
+`,
+          good: String.raw`
+# 태그: app:\${GIT_SHA} + app:v1.4.2. latest 는 쓰지 않는다
+# 롤백: helm rollback / kubectl set image ... app:\${PREV_SHA} — 빌드 없음
+# 배포 기록: 어떤 SHA 가 언제 어디에 → Sentry release (27회차), 배포 채널 메시지
+
+# DB 는 expand/contract
+# 배포 1 (expand):   ADD COLUMN full_name; 코드는 name 과 full_name 둘 다 쓴다 (읽기 name, 쓰기 둘 다)
+# 배포 2 (migrate):  백필 스크립트; 코드는 full_name 만 읽는다
+# 배포 3 (contract): DROP COLUMN name  — 배포 1·2 가 안정된 뒤
+# 각 단계에서 롤백해도 직전 버전 코드가 동작한다
+`,
+        },
+        {
+          id: 'l10', short: `배포 후`,
+          title: `배포 직후 스모크 테스트를 돌리고, 오류율이 튀면 자동으로 되돌린다`,
+          why: `배포가 "끝났다" 는 컨테이너가 떴다는 뜻이지 서비스가 된다는 뜻이 아닙니다. 핵심 흐름 3개를 운영 URL 에 바로 돌리고, 5분간 5xx 비율·LCP 를 직전 버전과 비교해 임계를 넘으면 사람 없이 롤백합니다. 카나리(5% 트래픽) 면 피해도 5% 입니다.`,
+          bad: String.raw`
+# 배포 완료 메시지 → 다음 날 아침 고객 문의로 알게 됨
+`,
+          good: String.raw`
+# 파이프라인 마지막 단계
+- name: smoke
+  run: pnpm playwright test e2e/smoke --project=prod  # 홈, 로그인, 결제 진입 3개, 2분 이내 (21회차 CI 설계)
+  env: { BASE_URL: https://www.example.com }
+- name: watch
+  run: node scripts/watch-deploy.ts --minutes 5 --max-5xx 0.5 --release \${{ github.sha }}
+# watch-deploy: 모니터링 API(27회차) 에서 release 별 5xx 비율·p95 를 읽어 직전 release 와 비교, 초과면 helm rollback 호출 + 알림
+
+# 카나리 (Argo Rollouts / 플랫폼 기능)
+strategy: { canary: { steps: [{ setWeight: 5 }, { pause: { duration: 5m } }, { analysis: { templates: [error-rate] } }, { setWeight: 50 }, { pause: { duration: 5m } }] } }
+# 배포 마커: Sentry·Grafana 에 release 주석 → 그래프에서 "이 배포 뒤부터" 가 보인다
+`,
+        },
+      ],
+    },
+    {
+      id: 'vue-39', no: 39, name: `코드 리뷰 체크리스트`,
+      lead: `리뷰는 코드가 아니라 결정을 확인하는 자리입니다. 저자가 먼저 할 일, 리뷰어가 보는 순서, Vue·Nuxt 에서 특히 자주 놓치는 것, 코멘트를 쓰는 말투까지 한 묶음입니다. 스타일은 도구에 맡기고 사람은 판단만 봅니다.`,
+      lessons: [
+        {
+          id: 'l1', short: `저자 먼저`,
+          title: `올리기 전에 자기 diff 를 리뷰어처럼 한 번 읽고, 설명에 왜·무엇·어떻게 확인했는지를 적는다`,
+          why: `리뷰어가 처음 보는 건 코드가 아니라 설명입니다. "버그 수정" 한 줄이면 리뷰어가 맥락을 다시 캐야 하고, 그 시간이 리뷰 지연의 대부분입니다. 자기 diff 를 다시 읽으면 디버그 로그, 주석 처리 코드, 무관한 포맷 변경의 절반은 올리기 전에 빠집니다.`,
+          bad: String.raw`
+제목: fix
+본문: (없음)
+diff: 기능 변경 + 프리티어 재포맷 300줄 + console.log 3개 + "// TODO 나중에"
+`,
+          good: String.raw`
+제목: 주문 목록: 필터 변경 시 이전 페이지 번호가 남는 문제 수정
+왜:   필터를 바꾸면 page=7 이 그대로라 빈 목록이 보였다 (이슈 #412)
+무엇: 필터 watch 에서 page 를 1 로 되돌림. URL 쿼리도 함께 갱신 (26회차 l4 패턴)
+확인: 단위 테스트 추가 (useOrderQuery.test.ts), 프리뷰에서 필터 → 페이지 → 필터 순으로 수동 확인
+범위 밖: 정렬 변경 시에도 같은 문제가 있어 보이나 별도 PR (#418)
+
+# 올리기 전 체크: 무관한 포맷 변경 분리, 로그 제거, 300줄 넘으면 쪼갠다 (리뷰 품질은 400줄부터 급락)
+`,
+        },
+        {
+          id: 'l2', short: `첫 질문`,
+          title: `리뷰어의 첫 질문은 "요구를 맞게 풀었나" 와 "더 작은 방법은 없나" 다. 스타일은 린터에 맡긴다`,
+          why: `들여쓰기·따옴표·import 순서를 사람이 지적하면 리뷰가 소음으로 차고 정작 설계 문제는 묻힙니다. 그건 ESLint·Prettier 가 CI 에서 막게 두고, 사람은 "이 변경이 문제를 푸는가", "이 추상화가 지금 필요한가", "삭제할 수 있는 코드가 늘었나" 를 봅니다.`,
+          bad: String.raw`
+// 코멘트 12개: "세미콜론", "여기 공백", "import 정렬", "const 로", ... 설계 코멘트 0개
+`,
+          good: String.raw`
+// 읽는 순서
+// 1) 설명과 이슈 → 무엇을 풀려는지 이해. 안 맞으면 코드 전에 질문
+// 2) 테스트 diff → 어떤 동작이 보장되는지. 테스트가 구현을 재진술하면 지적
+// 3) 공개 인터페이스 (props, emit, API 응답, 스키마) → 바뀌면 호환성·이름
+// 4) 구현 → 에러 경로, 경계값, 동시성
+// 5) 마지막에 가독성 (이름, 길이)
+// 스타일: eslint --max-warnings 0 + prettier --check 가 CI 에서 실패시키므로 코멘트하지 않는다
+`,
+        },
+        {
+          id: 'l3', short: `Vue 점검`,
+          title: `Vue 에서 꼭 보는 것: 반응성 끊김, key 없는 v-for, props 변경, watch 로 computed 를 흉내낸 곳`,
+          why: `이 네 가지는 린터가 일부만 잡고, 런타임엔 조용히 틀립니다. 구조 분해로 반응성이 끊긴 값, 인덱스 key, 부모 props 를 자식이 고치는 코드, watch 안에서 다른 ref 를 계산하는 패턴은 리뷰어가 눈으로 찾아야 합니다(03·04·06·10회차의 요약).`,
+          bad: String.raw`
+const { count } = toRefs(props)   // OK   vs   const { count } = props   // 끊김
+<li v-for="(item, i) in items" :key="i">                               // 인덱스 key
+props.modelValue.name = 'x'                                            // props 변경
+watch(items, () => { total.value = items.value.reduce(...) })          // computed 로 될 것
+`,
+          good: String.raw`
+// 리뷰 체크리스트 (Vue)
+// [ ] props 를 구조 분해했으면 toRefs 또는 3.5 reactive props destructure 인가
+// [ ] v-for key 가 고유 id 인가 (인덱스면 재정렬·삭제 시 상태가 밀린다)
+// [ ] 자식이 props 를 직접 바꾸지 않는가 → emit('update:x') 또는 defineModel
+// [ ] watch 가 "다른 상태를 계산" 하면 computed 로. watch 는 부작용(fetch, 저장) 에만
+// [ ] 템플릿에 인라인 객체·화살표 함수가 반복 요소 안에 없는가 (매 렌더 새 참조)
+// [ ] onMounted 에서 등록한 리스너·타이머를 onUnmounted 에서 해제하는가 (또는 VueUse 사용)
+// [ ] ref 와 shallowRef 선택이 데이터 크기에 맞는가
+`,
+        },
+        {
+          id: 'l4', short: `Nuxt 점검`,
+          title: `Nuxt 에서 꼭 보는 것: 서버·클라이언트 경계, useFetch 키, 비밀 노출, 하이드레이션 불일치`,
+          why: `서버에서만 도는 코드가 window 를 만지거나, 클라이언트에만 있는 값으로 첫 렌더가 달라지거나, 서버 전용 키가 public 에 들어가면 운영에서만 터집니다. useFetch 키 충돌은 다른 페이지의 데이터가 보이는 괴상한 버그로 나타납니다(12·15·28회차).`,
+          bad: String.raw`
+const w = window.innerWidth                              // setup 최상단: SSR 에서 ReferenceError
+useFetch('/api/items', { key: 'items' })                 // 다른 페이지와 같은 키, 다른 쿼리
+runtimeConfig: { public: { stripeSecret: '...' } }      // 비밀이 번들에
+<p>{{ new Date().toLocaleTimeString() }}</p>            // 서버·클라 시간 다름 → 하이드레이션 경고
+`,
+          good: String.raw`
+// 리뷰 체크리스트 (Nuxt)
+// [ ] window·document·localStorage 접근이 onMounted / import.meta.client / <ClientOnly> 안에 있는가
+// [ ] useFetch/useAsyncData 의 키가 URL·쿼리를 포함해 고유한가 (키를 생략하면 자동 생성 — 명시했다면 왜?)
+// [ ] runtimeConfig.public 에 비밀이 없는가. 서버 전용 모듈(db, 비밀 키) 이 components/ 나 composables/ 에서 import 되지 않는가
+// [ ] 첫 렌더 결과가 서버·클라에서 같은가 (시간, 랜덤, 사용자 설정은 쿠키나 useState 로)
+// [ ] server/api 핸들러가 입력을 검증(readValidatedBody) 하고 권한을 확인하는가
+// [ ] 새 라우트에 routeRules(캐시/ssr) 가 맞게 걸렸는가. 개인화 페이지가 캐시되지 않는가
+// [ ] 에러 시 createError 로 상태 코드를 주는가 (500 으로 뭉개지 않았나)
+`,
+        },
+        {
+          id: 'l5', short: `실패 경로`,
+          title: `모든 변경에 "실패하면 어떻게 되나" 를 묻는다. 빈 catch, 없는 로딩·빈 상태를 찾는다`,
+          why: `행복 경로는 저자가 이미 확인했습니다. 리뷰어의 가치는 그 다음에 있습니다. 네트워크가 끊기면, 목록이 비면, 권한이 없으면, 두 번 클릭하면, 응답이 느리면 어떻게 보이는지를 코드에서 찾고 없으면 묻습니다(27회차).`,
+          bad: String.raw`
+try { await save() } catch {}                      // 삼킴
+const { data } = await useFetch('/api/items')      // error, pending 무시
+<ul><li v-for="i in data">...</li></ul>            // 빈 목록 → 빈 화면
+`,
+          good: String.raw`
+// 리뷰 질문 템플릿 (복붙해서 코멘트)
+// - 이 요청이 실패하면 사용자는 무엇을 보나요? 재시도는 어디서 하나요?
+// - 목록이 0건일 때와 로딩 중일 때 화면이 구분되나요?
+// - 이 버튼을 연타하면 요청이 두 번 가나요? (isSubmitting)
+// - 이 catch 는 무엇을 잡으려는 건가요? 잡은 뒤 로그/알림은 어디로 가나요?
+// - 응답이 10초 걸리면 (타임아웃, 취소) 어떻게 되나요?
+// 저자가 "그 경우는 없다" 고 하면 테스트로 적어 달라고 한다 (없다는 것도 보장이니까)
+`,
+        },
+        {
+          id: 'l6', short: `테스트 보기`,
+          title: `테스트가 바뀐 동작을 설명하는지 본다. 구현을 복사한 테스트, 항상 통과하는 테스트를 가려낸다`,
+          why: `테스트 파일이 있다고 안전한 게 아닙니다. 모킹이 과해 실제 로직이 안 돌거나, 단언이 없거나, 구현 세부를 그대로 적어 리팩터링만 막는 테스트는 없는 것보다 비쌉니다. 리뷰어는 테스트를 "요구사항 목록" 으로 읽고, 빠진 케이스를 묻습니다(36회차).`,
+          bad: String.raw`
+it('calls api', async () => {
+  vi.mock('~/utils/api', () => ({ fetchOrders: vi.fn().mockResolvedValue([]) }))
+  await useOrders().load()
+  expect(fetchOrders).toHaveBeenCalled()         // 호출됐다는 것 외에 아무것도 보장 안 함
+})
+`,
+          good: String.raw`
+// 리뷰 체크리스트 (테스트)
+// [ ] 테스트 이름이 요구사항 문장인가 ("필터 바꾸면 1페이지로")
+// [ ] 변경된 분기마다 테스트가 있는가 (커버리지 diff 로 확인)
+// [ ] 모킹이 경계(HTTP) 에서 이뤄지고 내부 모듈을 갈아 끼우지 않는가
+// [ ] 단언이 결과(화면·반환값·저장된 상태) 를 보는가, 호출 여부만 보지 않는가
+// [ ] 테스트를 지워도 통과할 구현 변경이 있나 → 그 테스트는 가짜
+// [ ] 실패 케이스(오류 응답, 빈 입력) 가 하나 이상 있는가
+// 빠진 케이스는 "이 경우도 테스트에 넣어 주세요: 재고 0 + 쿠폰" 처럼 구체적으로
+`,
+        },
+        {
+          id: 'l7', short: `코멘트`,
+          title: `코멘트는 중요도 접두사, 질문형, 코드 제안으로. 칭찬도 적는다`,
+          why: `"이거 왜 이렇게 했어요?" 는 공격으로 읽힙니다. nit/suggestion/question/must 접두사로 무게를 밝히고, 대안은 말로 설명하지 말고 suggestion 블록으로 넣어 한 번에 반영되게 합니다. 잘한 점을 적으면 다음 PR 에서 그 패턴이 늘어납니다.`,
+          bad: String.raw`
+"이건 아니죠"
+"왜 watch 씀?"
+"여기 고치세요" (뭘 어떻게?)
+`,
+          good: String.raw`
+must: 이 핸들러는 권한 확인 없이 다른 사용자의 주문을 반환합니다. requireUser 뒤에 userId 비교가 필요해요.
+
+suggestion: watch 대신 computed 로 두면 total 이 항상 items 와 맞을 것 같아요.
+\`\`\`suggestion
+const total = computed(() => items.value.reduce((s, i) => s + i.price, 0))
+\`\`\`
+
+question: 필터 변경 때 page 를 1 로 되돌리는데, 정렬 변경 때는 그대로 두는 이유가 있을까요? (26회차 l4 참고)
+
+nit: 이름이 data 라 어떤 데이터인지 한 번 더 읽게 돼요. orders 는 어떨까요? (무시하셔도 됩니다)
+
+praise: 서버 오류를 setErrors 로 필드에 붙인 부분 좋네요. 다른 폼에도 같은 패턴 쓰면 좋겠어요.
+`,
+        },
+        {
+          id: 'l8', short: `리뷰어 태도`,
+          title: `하루 안에 첫 응답, 막는 건 must 만, 저자의 선택을 존중한다`,
+          why: `리뷰 대기는 가장 비싼 낭비입니다. 완벽한 리뷰를 사흘 뒤에 주느니 "오늘 저녁에 보겠다" 를 한 시간 안에 알리는 게 낫습니다. 그리고 "내 방식과 다름" 은 막을 이유가 아닙니다. 요구사항 불일치, 보안, 데이터 손상, 명백한 버그만 must 이고 나머지는 저자가 결정합니다.`,
+          bad: String.raw`
+# PR 열림 → 3일 침묵 → "전체적으로 다시 생각해 보시죠" → 저자는 이미 다음 작업 중
+# 취향(네이밍, 파일 분리) 으로 approve 보류
+`,
+          good: String.raw`
+# 팀 규칙 (CONTRIBUTING.md)
+- 리뷰 요청은 업무일 기준 24시간 안에 첫 응답 (리뷰 완료가 아니라 응답). 못 하면 다른 리뷰어에게 넘긴다
+- 리뷰어는 하루 시작에 리뷰 큐를 먼저 본다 (자기 코딩보다 먼저)
+- 변경 요청(Request changes) 은 must 가 있을 때만. suggestion·nit 만 있으면 approve + 코멘트
+- 리뷰어 둘이 의견이 갈리면 저자가 고른다. 셋째 사람을 부르지 않는다
+- 큰 방향 이슈는 PR 이 아니라 설계 단계(이슈·짧은 통화) 에서. PR 에서 "처음부터 다시" 는 리뷰어가 늦은 것
+`,
+        },
+        {
+          id: 'l9', short: `저자 대응`,
+          title: `모든 코멘트에 답하고 반영 여부를 밝힌다. 세 번 오가면 통화로 바꾼다`,
+          why: `코멘트 10개 중 7개만 고치고 조용히 푸시하면 리뷰어는 다시 전부 읽어야 합니다. "반영했습니다 / 이유가 있어 유지합니다(이유) / 별도 이슈로" 셋 중 하나로 답하면 리뷰어는 답만 봅니다. 글로 세 번 넘게 오가는 논쟁은 5분 통화가 빠릅니다.`,
+          bad: String.raw`
+# 코멘트 10개 → 커밋 "리뷰 반영" → 어떤 걸 반영했는지 모름 → 리뷰어 전체 재검토
+# 의견 차이를 코멘트 15개 스레드로
+`,
+          good: String.raw`
+# 각 코멘트에
+- "반영했습니다 (a1b2c3d)"
+- "유지하려고 합니다: 이 경로는 관리자만 오고 서버에서 다시 검증해서요. 괜찮을까요?"
+- "맞아요, 범위가 커서 #421 로 뺐습니다"
+# 반영 커밋은 리뷰 단위로 (fixup 커밋, 머지 때 squash) → 리뷰어가 "변경 사항만 보기" 로 본다
+# 답이 세 번 오가면: "10분 통화할까요?" → 결론을 스레드에 한 줄로 남긴다
+# 반영 끝나면 명시적으로 re-request review. 조용한 푸시는 알림이 안 간다
+`,
+        },
+        {
+          id: 'l10', short: `자동화`,
+          title: `사람이 볼 것만 남도록 린트·타입·테스트·번들 크기·체크리스트를 봇에게 넘긴다`,
+          why: `리뷰어의 집중력은 한정 자원입니다. 타입 오류, 테스트 실패, 번들 50KB 증가, 스토리 누락은 봇이 PR 에 적게 하고 사람은 설계와 실패 경로만 봅니다. CODEOWNERS 로 리뷰어 지정을 자동화하고 PR 템플릿으로 설명 항목을 강제합니다.`,
+          bad: String.raw`
+# 리뷰어가 로컬에 체크아웃해서 테스트 돌리고 번들 크기 재고 타입 검사
+`,
+          good: String.raw`
+# .github/pull_request_template.md
+## 왜
+## 무엇
+## 확인 방법
+- [ ] 테스트 추가/수정
+- [ ] 프리뷰에서 확인
+- [ ] 실패 경로 (오류/빈/로딩) 확인
+
+# CI (PR 마다): lint, typecheck (vue-tsc --noEmit), vitest --changed, e2e smoke, build
+# 봇 코멘트: 번들 크기 diff (size-limit-action / nuxt analyze), 커버리지 diff, Chromatic 링크(35회차), Lighthouse CI(23회차)
+# .github/CODEOWNERS
+/packages/ui/         @design-system-team
+/server/api/payments/ @payments-team
+# danger.js / reviewdog: 설명 비어 있으면 실패, 500줄 넘으면 경고, 마이그레이션 파일 있으면 DBA 태그
+`,
+        },
+      ],
+    },
+    {
+      id: 'vue-40', no: 40, name: `레거시 코드 개선 전략`,
+      lead: `Vue 2, Options API, Vuex, 거대 컴포넌트, any 투성이 코드를 멈추지 않고 고치는 습관입니다. 안전망을 먼저 깔고, 다시 쓰지 않고 감싸고, 손대는 파일만 바꾸고, 측정으로 보고합니다.`,
+      lessons: [
+        {
+          id: 'l1', short: `안전망`,
+          title: `테스트 없는 레거시는 고치기 전에 특성 테스트와 스모크 E2E 를 먼저 깐다`,
+          why: `"무엇이 맞는 동작인지" 아무도 모르는 코드는 현재 동작을 그대로 적은 테스트(특성 테스트) 가 기준입니다. 리팩터링 뒤 그 테스트가 깨지면 "바뀌었다" 는 걸 알 수 있습니다. 핵심 흐름 다섯 개를 E2E 로 묶어 두면 큰 변경도 밤에 잘 수 있습니다.`,
+          bad: String.raw`
+# "리팩터링하면서 테스트도 같이 짜겠습니다" → 리팩터링 뒤 테스트 → 바뀐 동작을 정답으로 적는다
+`,
+          good: String.raw`
+// 1) 특성 테스트: 현재 출력을 그대로 굳힌다 (맞는지 묻지 않는다)
+it('calcShipping — 현재 동작', () => {
+  expect(calcShipping({ total: 29999, region: 'jeju' })).toMatchInlineSnapshot(\`6000\`)
+  expect(calcShipping({ total: 30000, region: 'jeju' })).toMatchInlineSnapshot(\`3000\`)   // 이게 버그라도 일단 기록
+  expect(calcShipping({ total: 0, region: 'seoul' })).toMatchInlineSnapshot(\`0\`)
+})
+// 2) 스모크 E2E 5개: 로그인, 검색→상세, 장바구니→결제 진입, 마이페이지, 관리자 목록 (21회차)
+// 3) 그 다음에 리팩터링. 특성 테스트가 깨지면 "의도한 변화인가" 를 묻고 테스트를 고친다
+// 버그로 확인된 것은 이슈로 적고, 리팩터링 PR 에서 고치지 않는다 (l10)
+`,
+        },
+        {
+          id: 'l2', short: `감싸기`,
+          title: `전면 재작성은 금지. 새 코드는 새 방식으로 쓰고 옛 코드는 경계 뒤에서 서서히 줄인다`,
+          why: `"3개월이면 새로 짭니다" 는 늘 9개월이 되고, 그 사이 옛 코드에 기능이 추가됩니다. 스트랭글러 패턴은 새 라우트·새 기능을 새 방식으로 만들고 옛 코드는 호출만 받게 경계를 둡니다. 옛 코드는 호출이 0 이 되는 순간 지웁니다.`,
+          bad: String.raw`
+# feature/rewrite 브랜치 6개월. main 과 400 커밋 차이. 머지 불가
+`,
+          good: String.raw`
+# 경계 두기
+# legacy/           ← 옛 코드. 새 import 금지 (eslint no-restricted-imports: 'legacy/*' from 'src/**')
+# src/              ← 새 코드. legacy 를 부를 땐 adapters/ 를 통해서만
+# adapters/legacyOrders.ts — 옛 API 모양을 새 타입으로 변환하는 얇은 층
+export async function getOrders(): Promise<Order[]> {
+  const raw = await legacyApi.fetchOrderList()         // 옛 함수
+  return raw.map(toOrder)                                // 새 타입
+}
+# 규칙: 새 화면은 src/ 에만. 옛 화면을 고칠 일이 생기면 "고치면서 src/ 로 옮길 수 있나" 먼저 본다
+# 측정: legacy/ 의 파일 수·라인 수를 매주 그래프로. 줄지 않으면 전략을 바꾼다
+`,
+        },
+        {
+          id: 'l3', short: `Vue 2 → 3`,
+          title: `마이그레이션 빌드(compat) 로 올린 뒤 경고를 하나씩 끄고, 호환 모드를 마지막에 제거한다`,
+          why: `@vue/compat 은 Vue 3 런타임에 Vue 2 동작을 흉내 내는 층을 얹어 앱을 일단 돌게 합니다. 콘솔 경고가 "무엇을 고쳐야 하는지" 목록이 됩니다. 필터, 이벤트 버스($on), $listeners, 함수형 컴포넌트, v-model 변경이 큰 덩어리입니다.`,
+          bad: String.raw`
+# vue@3 으로 올리고 빌드 → 오류 200개 → 포기 → 6개월 뒤 다시
+`,
+          good: String.raw`
+# 1) 의존성 먼저: Vue 3 지원 버전으로 (vue-router@4, vuex@4 또는 pinia, vue-i18n@9, UI 라이브러리 v3 대응판)
+# 2) @vue/compat 로 전환
+// vite.config: alias { vue: '@vue/compat' }, vue 플러그인 template.compilerOptions.compatConfig = { MODE: 2 }
+// main.ts: configureCompat({ MODE: 2 })   → 앱이 Vue 2 모드로 돈다. 경고 목록 수집
+# 3) 경고 유형별로 끈다 (많은 순)
+//  - filters → 메서드/computed, 전역이면 app.config.globalProperties.$filters
+//  - $on/$off 이벤트 버스 → mitt 또는 provide/inject, Pinia
+//  - v-model (value/input) → modelValue/update:modelValue
+//  - $listeners / $scopedSlots → $attrs / $slots
+//  - 함수형 컴포넌트 functional: true → 일반 컴포넌트
+//  각 유형을 끌 때 configureCompat({ FILTERS: false }) 로 "더 이상 허용 안 함" 을 고정 → 회귀 방지
+# 4) 모든 플래그가 false → compat 제거, vue 로 alias 복귀. 특성 테스트·E2E 가 안전망 (l1)
+`,
+        },
+        {
+          id: 'l4', short: `Options → Composition`,
+          title: `Options API 는 그대로 둬도 된다. 손대는 파일만, 로직 추출 순서대로 옮긴다`,
+          why: `Options API 는 Vue 3 에서 1급입니다. 안 건드리는 파일을 "현대화" 하려고 여는 건 위험만 있습니다. 기능 변경으로 여는 파일에서, 그 파일이 커서 쪼개야 할 때만 옮깁니다. 옮길 땐 data→ref, computed→computed, methods→함수, watch→watch, 훅→on* 순서로 기계적으로 하고 동작은 바꾸지 않습니다.`,
+          bad: String.raw`
+# 스프린트 목표: "모든 컴포넌트 Composition API 전환" → 200 파일, 기능 변경 0, 회귀 12건
+`,
+          good: String.raw`
+// 기준: (a) 이 파일을 기능 때문에 열었고 (b) 300줄 넘거나 (c) 로직을 다른 곳과 공유해야 할 때
+// 순서 (한 커밋에 하나)
+// 1. data() → ref/reactive. this.x → x.value. 템플릿은 그대로
+// 2. computed → computed(() => ...)
+// 3. methods → 함수. this 제거
+// 4. watch → watch(source, cb)
+// 5. created/mounted/beforeDestroy → setup 본문 / onMounted / onUnmounted
+// 6. mixins → 같은 이름의 컴포저블 (mixin 이 쓰던 this.* 는 인자로)
+// 7. 그제서야 로직 묶음을 composables/useXxx.ts 로 추출 (테스트는 36회차 l3)
+// 각 단계마다 특성 테스트·스토리 통과. 템플릿은 마지막까지 안 건드린다
+// 자동 변환 도구(vue-composition-converter 등) 는 초안으로만, 결과를 반드시 읽는다
+`,
+        },
+        {
+          id: 'l5', short: `Vuex → Pinia`,
+          title: `Vuex 와 Pinia 는 공존한다. 모듈 하나씩 옮기고, 컴포넌트가 둘 다 안 보게 한다`,
+          why: `Vuex 스토어를 하루에 바꿀 수는 없습니다. 둘 다 설치하고 모듈 단위로 옮기면 됩니다. mutations 는 사라지고 actions 가 상태를 직접 바꾸며, getters 는 computed 가 됩니다. 옮기는 동안 컴포넌트가 this.$store 와 useXStore 를 섞어 쓰지 않게 컴포저블로 가립니다.`,
+          bad: String.raw`
+// 한 컴포넌트에서 this.$store.state.cart 와 useUserStore() 를 동시에
+`,
+          good: String.raw`
+// 1) 가리기: 컴포넌트는 useCart() 만 안다
+// composables/useCart.ts (옮기기 전)
+export function useCart() { const store = useStore(); return { items: computed(() => store.state.cart.items), add: (p) => store.dispatch('cart/add', p) } }
+// 2) Pinia 로 모듈 이전
+export const useCartStore = defineStore('cart', () => {
+  const items = ref<Item[]>([])
+  const total = computed(() => items.value.reduce((s, i) => s + i.price * i.qty, 0))     // getter
+  async function add(p: Product) { items.value.push({ ...p, qty: 1 }); await syncServer() } // mutation+action 합침
+  return { items, total, add }
+})
+// 3) useCart 의 내부만 교체 → 컴포넌트는 변경 없음
+export function useCart() { const s = useCartStore(); return { items: computed(() => s.items), add: s.add } }
+// 4) Vuex 모듈 삭제. 모든 모듈이 옮겨지면 useCart 는 useCartStore 로 치환 (한 줄 codemod)
+// Vuex 플러그인(persist, logger) 은 Pinia 대응판으로 (pinia-plugin-persistedstate)
+`,
+        },
+        {
+          id: 'l6', short: `거대 컴포넌트`,
+          title: `2,000줄 컴포넌트는 UI 를 자르기 전에 로직을 컴포저블로 먼저 뽑는다`,
+          why: `템플릿을 먼저 자식으로 쪼개면 props·emit 이 수십 개 생기고 상태가 어디 있는지 더 혼란스러워집니다. 먼저 script 안의 "같이 움직이는 상태·함수 묶음" 을 컴포저블로 빼면 템플릿은 그대로인 채 script 가 줄고, 그 뒤 템플릿 영역을 자식으로 떼면 각 자식이 필요한 컴포저블만 받습니다.`,
+          bad: String.raw`
+# 1단계로 템플릿을 5개 자식으로 분리 → 부모에 props 40개, emit 25개, 상태는 여전히 부모 → 더 복잡
+`,
+          good: String.raw`
+// OrderEditor.vue 2,000줄 →
+// 1) script 에서 묶음 식별: 고객 검색 (searchQ, results, select...), 품목 (items, addItem, total...), 배송 (address, fee...), 저장 (save, dirty...)
+// 2) 묶음마다 컴포저블로 추출. 컴포넌트는 호출만. 템플릿 변경 없음
+const customer = useCustomerPicker()
+const items = useOrderItems()
+const shipping = useShipping(items.total)
+const { save, dirty } = useOrderSave({ customer, items, shipping })
+// 템플릿의 searchQ → customer.searchQ 로 바꾸는 건 찾아바꾸기. 각 추출마다 커밋 + 특성 테스트
+// 3) 이제 템플릿 영역을 자식으로: <CustomerPicker v-bind="customer" /> — 자식은 필요한 컴포저블 결과만 props 로
+// 4) 공유 상태가 자식 셋 이상에 걸치면 그 묶음만 Pinia 로 (l5)
+`,
+        },
+        {
+          id: 'l7', short: `타입 도입`,
+          title: `JS 레거시는 allowJs + checkJs 로 시작하고 strict 플래그를 하나씩 켠다. any 는 세고 줄인다`,
+          why: `파일 전부를 .ts 로 바꾸고 strict 를 켜면 오류 3,000개에서 멈춥니다. JS 그대로 검사를 켜고(// @ts-check), 새 파일만 .ts 로, strict 옵션은 noImplicitAny → strictNullChecks 순으로 올리며, any 개수를 CI 에서 세어 늘지 않게 합니다.`,
+          bad: String.raw`
+# 전부 .ts 로 rename + strict: true → 오류 3,000 → 전부 // @ts-ignore 또는 as any
+`,
+          good: String.raw`
+// tsconfig.json — 단계 1
+{ "compilerOptions": { "allowJs": true, "checkJs": false, "strict": false, "noImplicitAny": false } }
+// 단계 2: 파일 상단 // @ts-check 를 손대는 .js 파일마다 추가. 새 파일은 .ts
+// 단계 3: "noImplicitAny": true  → 오류 난 곳만 명시 타입 (any 라도 명시적으로 적는다. 숨은 any 가 사라진다)
+// 단계 4: "strictNullChecks": true (가장 큰 덩어리. 디렉터리별로 tsconfig 를 나눠 적용 가능)
+// 단계 5: "strict": true, 나머지 .js → .ts
+
+# any 예산: CI 에서 개수를 세고 기준보다 늘면 실패
+grep -rE ":\s*any\b|as any|<any>" src --include=*.ts --include=*.vue | wc -l   # → 기준값 파일과 비교
+# 외부 라이브러리 타입이 없으면 types/shims.d.ts 에 declare module 'x' 로 일단 막고 이슈로
+# Vue 컴포넌트는 defineComponent 로 감싸야 Options API 에서도 this 타입이 나온다
+`,
+        },
+        {
+          id: 'l8', short: `도구 먼저`,
+          title: `빌드 도구를 먼저 바꾸고 프레임워크는 나중에. Vue CLI → Vite, Nuxt 2 → Bridge → Nuxt 3`,
+          why: `webpack 4 위에서 Vue 3 를 시도하면 로더·플러그인 호환까지 한꺼번에 싸웁니다. 빌드 도구를 Vite 로 먼저 바꾸면 그것만으로 개발 속도가 바뀌고 다음 단계의 변수가 줄어듭니다. Nuxt 2 는 Bridge 로 Nitro·Composition API 를 먼저 얻고, 그 다음 Nuxt 3 입니다.`,
+          bad: String.raw`
+# Vue CLI + Vue 2 + Vuex → 한 번에 Vite + Vue 3 + Pinia + TS. 2개월간 빌드가 안 됨
+`,
+          good: String.raw`
+# 순서 (각 단계는 배포 가능 상태로 끝난다)
+# 1. Vue CLI → Vite (Vue 2 그대로): @vitejs/plugin-vue2, 환경변수 VUE_APP_ → VITE_, require() → import, index.html 이동
+# 2. Vue 2.7 (Composition API 내장) → 새 코드는 setup() 으로. @vue/composition-api 플러그인 제거
+# 3. Vuex → Pinia (l5), 필터·이벤트 버스 제거 (l3 의 경고 목록 미리 줄이기)
+# 4. Vue 3 (compat) → 플래그 끄기 → compat 제거
+# 5. 라우터·i18n·UI 라이브러리 최신판
+
+# Nuxt
+# 1. Nuxt 2 → Nuxt Bridge: Nitro 서버, Composition API, Vite 를 Nuxt 2 위에서. 모듈 호환 확인
+# 2. 페이지·컴포저블을 Nuxt 3 API (useFetch, defineNuxtConfig) 로 Bridge 안에서 전환
+# 3. Nuxt 3 (또는 4) 로 — 남은 것은 디렉터리 구조와 모듈 교체
+# Bridge 가 막는 모듈(오래된 auth, 특정 UI 모듈) 이 있으면 그 모듈 대체를 먼저 — 그것이 진짜 작업량
+`,
+        },
+        {
+          id: 'l9', short: `죽은 코드`,
+          title: `안 쓰는 코드는 도구로 찾고, 의심되면 사용 로그를 심은 뒤 지운다. 주석 처리 코드는 즉시 삭제한다`,
+          why: `레거시의 30% 는 아무도 안 부르는 코드입니다. 그 코드도 타입 검사·빌드·리뷰 비용을 먹습니다. knip 이 export 되고 import 안 되는 것을 찾아 주고, 라우트·기능은 사용 로그 한 달이면 답이 나옵니다. 주석 처리된 코드는 git 에 있으니 지웁니다.`,
+          bad: String.raw`
+// function oldCalc() { ... }  ← 2019년에 주석 처리. "혹시 몰라서"
+// components/LegacyModal.vue — import 0 건, 그러나 "누가 쓸지 몰라" 유지
+`,
+          good: String.raw`
+# 정적 탐지
+pnpm dlx knip            # 안 쓰는 파일·export·의존성 목록
+pnpm dlx depcheck        # package.json 에만 있는 의존성
+# vue-tsc --noUnusedLocals, eslint no-unused-vars 는 CI 에서 error
+
+# 동적 확인 (라우트·기능 단위)
+// plugins/usage.client.ts — 의심 라우트에 진입 로그
+router.afterEach((to) => { if (SUSPECT.has(to.name)) track('legacy_route', { name: to.name }) })
+# 30일 0건 → 삭제 PR. 삭제 PR 은 "삭제만" (다른 변경 섞지 않는다). 되돌리기는 revert 한 번
+
+# 주석 처리 코드: 보이는 즉시 삭제. 필요하면 커밋 해시를 코멘트에 적는다 ("이전 구현: a1b2c3d")
+# 기능 플래그로 꺼 둔 코드: 플래그 만료일을 적고 지난 것은 지운다
+`,
+        },
+        {
+          id: 'l10', short: `예산`,
+          title: `개선은 작게, 기능 티켓에 묶어, 동작 변경과 분리해, 숫자로 보고한다`,
+          why: `"리팩터링 스프린트" 는 승인받기 어렵고 끝나도 아무도 모릅니다. 기능 작업마다 10~20% 를 그 주변 정리에 쓰면 꾸준히 줄어듭니다. 리팩터링 커밋은 동작 변경과 분리해야 리뷰와 롤백이 쉽습니다. 빌드 시간·번들·오류율·any 개수를 매달 보여 주면 다음 예산이 나옵니다.`,
+          bad: String.raw`
+# "이번 분기는 리팩터링만" → 비즈니스가 거절 → 리팩터링 0
+# 또는 기능 PR 에 리팩터링 2,000줄 섞음 → 리뷰 불가, 회귀 시 전체 롤백
+`,
+          good: String.raw`
+# 규칙
+# - 기능 티켓마다 "주변 정리" 서브태스크 (보이스카우트: 온 곳보다 깨끗하게). 그 파일·그 함수까지만
+# - PR 분리: ① 리팩터링 (동작 동일, 특성 테스트 통과) → ② 기능 변경. ①은 리뷰가 빠르고 ②는 diff 가 작다
+# - 큰 이전(l3, l8) 은 단계마다 배포. "중간 상태로 2주" 가 정상
+
+# 월간 지표 (대시보드 한 장)
+# - legacy/ 라인 수, any 개수, Options API 파일 수 (줄어드는 그래프)
+# - 빌드 시간, 번들 크기 (23회차), 테스트 수·커버리지(분기 있는 파일 기준)
+# - 운영 오류율·프론트 오류 수 (27회차), 배포 빈도·롤백 횟수 (38회차)
+# 보고: "지난 분기 legacy 31% → 22%, 빌드 4분 → 50초, JS 오류 주당 120 → 40" — 숫자가 다음 예산이다
+`,
+        },
+      ],
+    },
     // @@APPEND@@ 새 회차는 이 줄 위에 추가
   ],
   // 다음에 만들 묶음 예고. 없으면 null.
   upcoming: {
-    name: `301~400번 후보 주제`,
+    name: `401~500번 후보 주제`,
     items: [
-      `Vue 3.6 Vapor 모드와 alien-signals`,
-      `디자인 토큰과 테마 시스템`,
-      `폼 라이브러리 비교 (VeeValidate, FormKit, Regle)`,
-      `상태 머신 (XState) 과 복잡한 UI 흐름`,
-      `컴포넌트 문서화 (Storybook, Histoire)`,
-      `단위 테스트 심화 (Vitest, Testing Library)`,
-      `Nuxt 서버 심화 (Nitro 스토리지, 태스크, 캐시)`,
-      `배포 전략 (Docker, 엣지, 프리뷰 환경)`,
-      `코드 리뷰 체크리스트`,
-      `레거시 코드 개선 전략`,
+      `국제화 심화 (라우팅, 복수형, 날짜·통화 포맷)`,
+      `애니메이션과 트랜지션 (Transition, Motion, View Transitions)`,
+      `접근 가능한 컴포넌트 만들기 (headless UI, Reka UI)`,
+      `서버 컴포넌트와 아일랜드 (NuxtIsland)`,
+      `데이터 페칭 전략 심화 (TanStack Query, 캐시 무효화)`,
+      `웹 워커와 무거운 계산 분리`,
+      `브라우저 API 활용 (Clipboard, Share, IndexedDB, File System)`,
+      `타입스크립트 고급 패턴 (제네릭 컴포넌트, 조건부 타입)`,
+      `디자인 시스템 운영 (버전, 변경 로그, 폐기 정책)`,
+      `팀 컨벤션과 온보딩 문서`,
     ],
   },
 };
